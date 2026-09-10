@@ -118,6 +118,7 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/repos", n.withAuth(n.handleRepos))
 	mux.HandleFunc("GET /v1/repos/{id}/metadata", n.withAuth(n.handleRepoMetadata))
 	mux.HandleFunc("GET /v1/repos/{id}/state", n.withAuth(n.handleRepoState))
+	mux.HandleFunc("GET /v1/repos/{id}/assets/{tag}/{name}", n.withAuth(n.handleAsset))
 	mux.HandleFunc("GET /v1/users", n.withAuth(n.handleUsers))
 	mux.HandleFunc("POST /v1/notify", n.withAuth(n.handleNotify))
 	mux.HandleFunc("POST /v1/forward", n.withAuth(n.handleForward))

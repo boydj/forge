@@ -52,6 +52,10 @@ type Options struct {
 	SyncInterval time.Duration
 	// ReposDir is the root of bare repositories (<owner>/<name>.git).
 	ReposDir string
+	// AssetsDir is the root of release asset files
+	// (<owner>/<name>/<tag>/<asset>), config AssetsDir(). Default: the
+	// "assets" sibling of ReposDir, which is the standard data layout.
+	AssetsDir string
 	// Version is reported in /v1/status.
 	Version string
 
@@ -72,6 +76,9 @@ type Node struct {
 	meta   string   // metadata leader
 	log    *slog.Logger
 	client *http.Client
+	// assetClient has no overall timeout: asset downloads are bounded per
+	// request by size in fetchAsset.
+	assetClient *http.Client
 
 	syncMu sync.Mutex // one sync cycle at a time
 	wake   chan int64 // repo ids to sync promptly (0: everything)
@@ -99,6 +106,9 @@ func New(o Options) (*Node, error) {
 	}
 	if o.SyncInterval <= 0 {
 		o.SyncInterval = 10 * time.Second
+	}
+	if o.AssetsDir == "" {
+		o.AssetsDir = filepath.Join(filepath.Dir(filepath.Clean(o.ReposDir)), "assets")
 	}
 	secret := strings.TrimSpace(o.Secret)
 	if secret == "" && o.SecretFile != "" {
@@ -134,13 +144,14 @@ func New(o Options) (*Node, error) {
 	}
 	sort.Strings(peers)
 	n := &Node{
-		opts:   o,
-		secret: []byte(secret),
-		peers:  peers,
-		meta:   meta,
-		log:    o.Log.With("component", "repl"),
-		client: &http.Client{Timeout: 2 * time.Minute},
-		wake:   make(chan int64, 64),
+		opts:        o,
+		secret:      []byte(secret),
+		peers:       peers,
+		meta:        meta,
+		log:         o.Log.With("component", "repl"),
+		client:      &http.Client{Timeout: 2 * time.Minute},
+		assetClient: &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 30 * time.Second}},
+		wake:        make(chan int64, 64),
 	}
 	return n, nil
 }
@@ -169,6 +180,13 @@ func (n *Node) SetForwardHandler(h Handler) { n.opts.Forward = h }
 // RepoPath is the on-disk location of a repository.
 func (n *Node) RepoPath(owner, name string) string {
 	return filepath.Join(n.opts.ReposDir, owner, name+".git")
+}
+
+// AssetPath is the on-disk location of a release asset, laid out exactly
+// like forge.AssetPath. Callers must validate tag and name (validAsset)
+// first; this function does not.
+func (n *Node) AssetPath(rp *store.Repo, tag, name string) string {
+	return filepath.Join(n.opts.AssetsDir, rp.Owner, rp.Name, tag, name)
 }
 
 // Start listens on the control address and runs the replica worker until ctx

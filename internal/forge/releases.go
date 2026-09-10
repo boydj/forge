@@ -127,6 +127,8 @@ func (f *Forge) DeleteRelease(ctx context.Context, u *store.User, acc Access, re
 		return err
 	}
 	_ = os.RemoveAll(filepath.Dir(f.AssetPath(acc.Repo, rel.Tag, "x")))
+	_ = f.Store.UpdateRepo(ctx, acc.Repo)
+	f.Event(ctx, store.EventRepoUpdate, acc.Repo, u, fmt.Sprintf("%s deleted release %s of %s/%s", u.Name, rel.Tag, acc.Repo.Owner, acc.Repo.Name), "/~"+acc.Repo.Owner+"/"+acc.Repo.Name+"/releases/", nil)
 	return nil
 }
 
@@ -232,6 +234,8 @@ func (f *Forge) RemoveAsset(ctx context.Context, u *store.User, acc Access, rel 
 	if err := f.Store.DeleteReleaseAsset(ctx, a.ID); err != nil {
 		return err
 	}
+	_ = f.Store.UpdateRepo(ctx, acc.Repo)
+	f.Event(ctx, store.EventRepoUpdate, acc.Repo, u, fmt.Sprintf("%s removed %s from %s/%s %s", u.Name, a.Name, acc.Repo.Owner, acc.Repo.Name, rel.Tag), releasePath(acc.Repo, rel.Tag), nil)
 	return os.Remove(f.AssetPath(acc.Repo, rel.Tag, a.Name))
 }
 

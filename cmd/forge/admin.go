@@ -604,7 +604,7 @@ func newReplNode(app *forge.Forge) (*repl.Node, error) {
 	}
 	return repl.New(repl.Options{
 		Name: app.Config.Node, Listen: c.ControlListen, Peers: c.Peers, SecretFile: c.SecretFile,
-		MetadataLeader: c.MetadataLeader, SyncInterval: c.SyncInterval.Duration, ReposDir: app.Config.ReposDir(),
+		MetadataLeader: c.MetadataLeader, SyncInterval: c.SyncInterval.Duration, ReposDir: app.Config.ReposDir(), AssetsDir: app.Config.AssetsDir(),
 		Version: version.Version, Store: app.Store, Git: app.Git, Log: app.Log,
 	})
 }

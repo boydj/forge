@@ -44,6 +44,7 @@ are future work.
 | `GET /v1/repos` | every node | every repository record this node knows, including soft-deleted ones |
 | `GET /v1/repos/{id}/metadata` | leader of `{id}` | snapshot of the repository's collaborators, issues, changes, change versions, comments, reviews, releases, release assets |
 | `GET /v1/repos/{id}/state` | every node | this node's refs for the repository and its replica bookkeeping (used by `move-leader`) |
+| `GET /v1/repos/{id}/assets/{tag}/{name}` | leader of `{id}` | one release asset file, streamed with `Content-Length` and `X-Forge-SHA256` (see Release asset files) |
 | `GET /v1/users` | metadata leader | snapshot of users, certificates, ssh_keys |
 | `POST /v1/notify {repo_id}` | every node | ask the worker to sync one repository now |
 | `POST /v1/forward` | leader | run a forwarded Titan write (see Forwarding) |
@@ -88,9 +89,11 @@ For a node N, each cycle (`Node.SyncOnce`) does, in order:
       record's `pushed_at` moved, an event mentioned the repository, a
       notify named it, or the last attempt failed; pull and apply the
       metadata snapshot when `updated_at` moved, an event mentioned the
-      repository, or the last attempt failed. Record the outcome in
-      `repo_replicas` (status `ok`/`error`, detail, `last_synced_at`,
-      `last_event_id` = cursor, `leader_updated_at`, `leader_pushed_at`).
+      repository, or the last attempt failed; then reconcile the release
+      asset files with the replicated `release_assets` rows (every cycle;
+      see Release asset files). Record the outcome in `repo_replicas`
+      (status `ok`/`error`, detail, `last_synced_at`, `last_event_id` =
+      cursor, `leader_updated_at`, `leader_pushed_at`).
    5. Set `forge_replica_lag_events{leader=P}` = P's last event id minus
       the cursor.
 3. Set `forge_leader_repositories`.
@@ -106,6 +109,50 @@ record names P as leader (so the handoff written by the old leader during
 overwritten by a peer. Repository ids are assigned by the creating leader;
 a replica never inserts rows for repositories it does not lead, so ids never
 collide (the forge layer refuses such writes with `ErrNotLeader`).
+
+### Release asset files
+
+Asset files live outside SQLite (`<data>/assets/<owner>/<repo>/<tag>/<name>`,
+`forge.AssetPath`; the replication node builds the same path from
+`repl.Options.AssetsDir`, which defaults to the `assets` sibling of
+`ReposDir`). Rows in `release_assets` carry the size and sha256 of each
+file, so replicas can reconcile files against rows without any extra
+bookkeeping. After the per-repository step above (`Node.syncAssets`):
+
+- Every `release_assets` row of the repository (joined with its release for
+  the tag) is checked against the local file. A missing file, a non-regular
+  file or a size mismatch triggers a download; after a metadata pull (or a
+  `resync`) every present file is additionally hashed and re-fetched on a
+  sha256 mismatch. Between metadata changes only existence and size are
+  checked, so a same-length corruption is caught by the next metadata change
+  or `resync`, not by every 10 s poll (hashing every asset each cycle would
+  be too costly).
+- Downloads come from the repository's leader, one at a time, via
+  `GET /v1/repos/{id}/assets/{tag}/{name}`. The leader validates the tag
+  (no space, `/`, `\`, `.`/`..`, at most 128 bytes) and the name
+  (`forge.assetNameRe`), requires a matching `release_assets` row for that
+  repository before touching the filesystem, and only then opens the
+  record's path; a file on disk without a row is never served (404). The
+  client refuses records larger than 1 GiB, requires `Content-Length` equal
+  to the record's size and `X-Forge-SHA256` equal to its hash, streams into
+  a temporary file under `<data>/tmp` (same filesystem), verifies length and
+  sha256, sets mode 0640 and renames into place. A partial or wrong
+  download never replaces a file.
+- Files under `<assets>/<owner>/<repo>/` that no row names are removed, and
+  tag directories left empty are deleted (bounded to that one repository
+  directory, two fixed levels, symlinks are not followed).
+- A per-file failure (leader has no file, hash mismatch, transfer error) is
+  recorded in `repo_replicas.detail` as `assets: <tag>/<name>: ...` with
+  status `error`; the other files of the repository are still processed,
+  the git refs and metadata rows already applied stay, and the next cycle
+  retries. `/v1/repos/{id}/state` therefore reports `error` while any
+  asset is missing, and `move-leader` refuses until the target has them.
+
+Note that `forge.RemoveAsset` and `forge.DeleteRelease` neither stamp the
+repository's `updated_at` nor append an event, so replicas notice a
+removal only at the next change to that repository (or `resync`); until
+then the replica keeps serving the stale file. `AddAsset` emits an event,
+so additions replicate promptly.
 
 ### Per-origin cursors
 
@@ -125,7 +172,7 @@ across origins, id order within one origin).
 | Collaborators, issues, changes, change versions, comments, reviews, releases, release assets | repository leader | whole-repository snapshot, applied atomically (delete + insert by leader ids) |
 | Events | authoring node | append-only pull with per-origin cursor |
 | Users, certificates, SSH keys | metadata leader | snapshot upsert every cycle |
-| Release asset **files** | repository leader | **not replicated in v1**; replicas serve metadata only and must proxy or redirect downloads to the leader |
+| Release asset **files** | repository leader | per-file fetch over the control plane, verified against the row's size and sha256; files without a row removed (see Release asset files) |
 | Tokens (enrolment codes), settings, `nodes`, `repo_replicas` | local | never replicated |
 
 ## Consistency
@@ -164,6 +211,11 @@ across origins, id order within one origin).
 | Peer serves events at or below our cursor (rebuilt node with the same name) | that peer's sync is aborted with an error; nothing applied | rebuild replicas from the leader, or reset the cursor row for that origin |
 | Wrong secret or unknown node name | 401 / 403, logged on the server as `control auth failed` | fix `cluster.peers` / `secret_file` |
 | Leader's repository files missing | fetch fails, replica row `error` | restore the leader's repository; replicas keep their last good copy |
+| Leader's asset file missing or its size differs from the row | leader answers 404 / 500 for that asset; replica row `error` with `assets: <tag>/<name>: ...`; other assets, refs and rows of the repository are still synced | restore the file on the leader (or remove the asset); the replica retries every cycle |
+| Asset download interrupted, short, or hash mismatch | temporary file discarded, existing local copy untouched, row `error` | retried next cycle; persistent mismatch means the leader's file no longer matches its record |
+| Asset record larger than 1 GiB | refused before any transfer, row `error` | the size bound is `repl.maxAssetBytes`; split the file or raise the bound |
+| Replica's asset copy truncated or deleted | repaired by the next cycle (existence and size are checked every cycle) | nothing to do |
+| Replica's asset copy corrupted at the same length | served stale until the next metadata change or `forge admin repl resync` | run `resync` |
 
 Replicas keep serving their last good copy through all of the above.
 
@@ -222,5 +274,7 @@ v1: `git push` to a replica is refused with a message naming the leader.
 - Incremental metadata (row-level changes carried in events) instead of
   whole-repository snapshots, once repositories are large enough for the
   snapshot to matter.
-- Release asset file replication.
+- Stamp `updated_at` / emit an event on asset and release removal so that
+  replicas drop the files promptly; remove asset files of soft-deleted
+  repositories on replicas.
 - Cursor reset and node rebuild tooling.

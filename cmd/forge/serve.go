@@ -94,7 +94,7 @@ func runServe(args []string) error {
 		rn, err = repl.New(repl.Options{
 			Name: cfg.Node, Listen: cfg.Cluster.ControlListen, Peers: cfg.Cluster.Peers,
 			SecretFile: cfg.Cluster.SecretFile, MetadataLeader: cfg.Cluster.MetadataLeader,
-			SyncInterval: cfg.Cluster.SyncInterval.Duration, ReposDir: cfg.ReposDir(), Version: version.Version,
+			SyncInterval: cfg.Cluster.SyncInterval.Duration, ReposDir: cfg.ReposDir(), AssetsDir: cfg.AssetsDir(), Version: version.Version,
 			Store: app.Store, Git: app.Git, Log: log.With("proto", "repl"), Metrics: reg, Forward: handler,
 		})
 		if err != nil {

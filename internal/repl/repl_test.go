@@ -1,15 +1,21 @@
 package repl
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +70,7 @@ func newCluster(t *testing.T) (*testNode, *testNode) {
 	start := func(tn *testNode, l net.Listener, peer *testNode, reg *metrics.Registry) {
 		n, err := New(Options{
 			Name: tn.name, Peers: map[string]string{peer.name: peer.addr}, Secret: testSecret,
-			ReposDir: filepath.Join(tn.dir, "repos"), Version: "test", Store: tn.st, Git: tn.git, Metrics: reg,
+			ReposDir: filepath.Join(tn.dir, "repos"), AssetsDir: filepath.Join(tn.dir, "assets"), Version: "test", Store: tn.st, Git: tn.git, Metrics: reg,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -502,4 +508,308 @@ func TestRunLoop(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// addAsset does what forge.AddAsset does on a leader: write the file at the
+// asset path, record the row and append an event.
+func addAsset(t *testing.T, tn *testNode, rp *store.Repo, rel *store.Release, name string, data []byte) *store.ReleaseAsset {
+	t.Helper()
+	ctx := context.Background()
+	path := tn.node.AssetPath(rp, rel.Tag, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	a, err := tn.st.AddReleaseAsset(ctx, &store.ReleaseAsset{ReleaseID: rel.ID, Name: name, Size: int64(len(data)), MIME: "application/octet-stream", SHA256: hex.EncodeToString(sum[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tn.st.AddEvent(ctx, &store.Event{Kind: store.EventReleaseAsset, RepoID: rp.ID, UserID: rp.OwnerID, Subject: "attached " + name, Path: "/" + rp.Owner + "/" + rp.Name}); err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// touchRepo appends an event so that replicas re-pull the metadata snapshot
+// (the store's asset deletes do not stamp the repository themselves).
+func touchRepo(t *testing.T, tn *testNode, rp *store.Repo) {
+	t.Helper()
+	if _, err := tn.st.AddEvent(context.Background(), &store.Event{Kind: store.EventAdminAction, RepoID: rp.ID, UserID: rp.OwnerID, Subject: "touch", Path: "/" + rp.Owner + "/" + rp.Name}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func fileSHA256(t *testing.T, path string) (string, int64) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), int64(len(b))
+}
+
+func TestReplicateAssets(t *testing.T) {
+	a, b := newCluster(t)
+	ctx := context.Background()
+	alice, rp := seed(t, a)
+	rel, err := a.st.CreateRelease(ctx, rp.ID, alice.ID, "v0.1", "first", "notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := make([]byte, 300*1024+17)
+	if _, err := rand.Read(blob); err != nil {
+		t.Fatal(err)
+	}
+	tarball := addAsset(t, a, rp, rel, "proj-0.1.tar.gz", blob)
+	sig := addAsset(t, a, rp, rel, "proj-0.1.tar.gz.asc", []byte("-----BEGIN PGP SIGNATURE-----\n"))
+
+	if err := b.node.SyncOnce(ctx); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	bpath := b.node.AssetPath(rp, "v0.1", "proj-0.1.tar.gz")
+	if got, err := os.ReadFile(bpath); err != nil || !bytes.Equal(got, blob) {
+		t.Fatalf("tarball on b: %d bytes, %v", len(got), err)
+	}
+	if sum, size := fileSHA256(t, bpath); sum != tarball.SHA256 || size != tarball.Size {
+		t.Fatalf("tarball on b: sha256 %s size %d, want %s %d", sum, size, tarball.SHA256, tarball.Size)
+	}
+	if fi, err := os.Stat(bpath); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("tarball mode: %v %v", fi.Mode(), err)
+	}
+	if sum, _ := fileSHA256(t, b.node.AssetPath(rp, "v0.1", "proj-0.1.tar.gz.asc")); sum != sig.SHA256 {
+		t.Errorf("signature on b: sha256 %s, want %s", sum, sig.SHA256)
+	}
+	if p, _ := b.st.ReplicaFor(ctx, rp.ID, "b"); p == nil || p.Status != store.ReplicaOK {
+		t.Fatalf("replica row: %+v", p)
+	}
+	// The rows replicated too, and the temp dir is left clean.
+	if brel, err := b.st.ReleaseByTag(ctx, rp.ID, "v0.1"); err != nil || len(brel.Assets) != 2 {
+		t.Fatalf("release on b: %+v %v", brel, err)
+	}
+	if ents, _ := os.ReadDir(b.node.assetTmpDir()); len(ents) != 0 {
+		t.Errorf("temp files left: %d", len(ents))
+	}
+
+	// A truncated copy is noticed by the cheap per-cycle check and repaired
+	// without any change on the leader.
+	if err := os.WriteFile(bpath, blob[:100], 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.node.SyncOnce(ctx); err != nil {
+		t.Fatalf("sync after truncation: %v", err)
+	}
+	if sum, _ := fileSHA256(t, bpath); sum != tarball.SHA256 {
+		t.Errorf("truncated tarball not repaired")
+	}
+	// Same-length corruption is only caught by the full check: a resync.
+	bad := append([]byte(nil), blob...)
+	bad[10] ^= 0xff
+	if err := os.WriteFile(bpath, bad, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.node.Resync(ctx, rp.ID); err != nil {
+		t.Fatalf("resync: %v", err)
+	}
+	if sum, _ := fileSHA256(t, bpath); sum != tarball.SHA256 {
+		t.Errorf("corrupt tarball not repaired by resync")
+	}
+	// A missing file is fetched again.
+	if err := os.Remove(bpath); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.node.SyncOnce(ctx); err != nil {
+		t.Fatalf("sync after removal: %v", err)
+	}
+	if sum, _ := fileSHA256(t, bpath); sum != tarball.SHA256 {
+		t.Errorf("missing tarball not fetched")
+	}
+
+	// A file the leader cannot serve: recorded on the replica row, other
+	// files unaffected, retried until the leader is fixed.
+	apath := a.node.AssetPath(rp, "v0.1", "proj-0.1.tar.gz")
+	if err := os.Rename(apath, apath+".away"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(bpath); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.node.SyncOnce(ctx); err == nil {
+		t.Fatal("sync succeeded with the leader's asset missing")
+	}
+	if p, _ := b.st.ReplicaFor(ctx, rp.ID, "b"); p == nil || p.Status != store.ReplicaError || !strings.Contains(p.Detail, "assets: v0.1/proj-0.1.tar.gz") || !strings.Contains(p.Detail, "404") {
+		t.Fatalf("replica row after failure: %+v", p)
+	}
+	if _, err := os.Stat(b.node.AssetPath(rp, "v0.1", "proj-0.1.tar.gz.asc")); err != nil {
+		t.Errorf("signature removed while tarball failed: %v", err)
+	}
+	if err := os.Rename(apath+".away", apath); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.node.SyncOnce(ctx); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if p, _ := b.st.ReplicaFor(ctx, rp.ID, "b"); p == nil || p.Status != store.ReplicaOK {
+		t.Fatalf("replica row after retry: %+v", p)
+	}
+	if sum, _ := fileSHA256(t, bpath); sum != tarball.SHA256 {
+		t.Errorf("tarball not fetched on retry")
+	}
+
+	// An oversized record is refused before any transfer.
+	if _, err := a.st.AddReleaseAsset(ctx, &store.ReleaseAsset{ReleaseID: rel.ID, Name: "huge.bin", Size: 2 << 30, MIME: "application/octet-stream", SHA256: strings.Repeat("0", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	touchRepo(t, a, rp)
+	if err := b.node.SyncOnce(ctx); err == nil || !strings.Contains(err.Error(), "huge.bin") {
+		t.Fatalf("oversized asset: %v", err)
+	}
+	huge, _ := a.st.ReleaseAsset(ctx, rel.ID, "huge.bin")
+	if err := a.st.DeleteReleaseAsset(ctx, huge.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deleting a row on the leader removes the file on the replica; a stray
+	// file in the tag directory goes with it, a stray tag directory's files
+	// too, and an unrelated repository's files are untouched.
+	if err := a.st.DeleteReleaseAsset(ctx, sig.ID); err != nil {
+		t.Fatal(err)
+	}
+	touchRepo(t, a, rp)
+	stray := b.node.AssetPath(rp, "v0.1", "stray.bin")
+	if err := os.WriteFile(stray, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	strayTag := b.node.AssetPath(rp, "v9.9", "old.bin")
+	if err := os.MkdirAll(filepath.Dir(strayTag), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(strayTag, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(b.dir, "assets", "alice", "other", "v1", "keep.bin")
+	if err := os.MkdirAll(filepath.Dir(other), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.node.SyncOnce(ctx); err != nil {
+		t.Fatalf("sync after delete: %v", err)
+	}
+	for _, p := range []string{b.node.AssetPath(rp, "v0.1", "proj-0.1.tar.gz.asc"), stray, strayTag, filepath.Dir(strayTag)} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s still present", p)
+		}
+	}
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("unrelated file removed: %v", err)
+	}
+	if sum, _ := fileSHA256(t, bpath); sum != tarball.SHA256 {
+		t.Errorf("tarball lost during prune")
+	}
+	// Deleting the release removes the whole tag directory on the replica.
+	if err := a.st.DeleteRelease(ctx, rel.ID); err != nil {
+		t.Fatal(err)
+	}
+	touchRepo(t, a, rp)
+	if err := b.node.SyncOnce(ctx); err != nil {
+		t.Fatalf("sync after release delete: %v", err)
+	}
+	if _, err := os.Stat(filepath.Dir(bpath)); err == nil {
+		t.Errorf("tag directory still present on b")
+	}
+}
+
+func TestAssetEndpoint(t *testing.T) {
+	a, _ := newCluster(t)
+	ctx := context.Background()
+	alice, rp := seed(t, a)
+	rel, err := a.st.CreateRelease(ctx, rp.ID, alice.ID, "v0.1", "first", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := addAsset(t, a, rp, rel, "proj.tar.gz", []byte("tarball"))
+	// A secret file outside the assets tree that traversal would reach.
+	if err := os.WriteFile(filepath.Join(a.dir, "secret"), []byte("s3cret"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(a.node.Handler())
+	defer srv.Close()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	get := func(rawPath string) (*http.Response, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, srv.URL+rawPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+testSecret)
+		req.Header.Set(headerNode, "b")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp, body
+	}
+	base := "/v1/repos/" + strconv.FormatInt(rp.ID, 10) + "/assets/"
+	resp, body := get(base + "v0.1/proj.tar.gz")
+	if resp.StatusCode != http.StatusOK || string(body) != "tarball" || resp.Header.Get(headerSHA256) != asset.SHA256 || resp.ContentLength != 7 {
+		t.Fatalf("good: %d %q sha=%q len=%d", resp.StatusCode, body, resp.Header.Get(headerSHA256), resp.ContentLength)
+	}
+	// Unknown tag, name, repository; unauthenticated.
+	for _, p := range []string{base + "v0.1/nope.tar.gz", base + "v0.2/proj.tar.gz", "/v1/repos/999/assets/v0.1/proj.tar.gz"} {
+		if resp, _ := get(p); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: %d", p, resp.StatusCode)
+		}
+	}
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+base+"v0.1/proj.tar.gz", nil)
+	if resp, err := client.Do(req); err != nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("unauthenticated: %v %v", resp, err)
+	}
+	// A file present on disk without a row is not served.
+	if err := os.WriteFile(a.node.AssetPath(rp, "v0.1", "norow.bin"), []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := get(base + "v0.1/norow.bin"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("file without row: %d", resp.StatusCode)
+	}
+	// Traversal, plain and encoded, in either segment: never 200, never
+	// the secret.
+	for _, p := range []string{
+		base + "../../../secret", base + "v0.1/../../../../secret", base + "..%2F..%2F..%2Fsecret",
+		base + "v0.1/..%2F..%2F..%2F..%2Fsecret", base + "%2e%2e/%2e%2e/%2e%2e/secret", base + "%2e%2e%2f%2e%2e%2f%2e%2e%2fsecret",
+		base + "v0.1%2F..%2F..%2F..%2Fsecret", base + "..%2Fv0.1/proj.tar.gz", base + "v0.1/%2e%2e%2Fproj.tar.gz",
+		base + "v0.1/proj.tar.gz%00", base + "v0.1/.hidden", base + "v0.1/.",
+	} {
+		resp, body := get(p)
+		if resp.StatusCode == http.StatusOK || bytes.Contains(body, []byte("s3cret")) {
+			t.Errorf("%s: %d %q", p, resp.StatusCode, body)
+		}
+	}
+	// A replica answers 409 for repositories it does not lead.
+	if err := a.st.SetRepoLeader(ctx, rp.ID, "b"); err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ := get(base + "v0.1/proj.tar.gz"); resp.StatusCode != http.StatusConflict {
+		t.Errorf("not leader: %d", resp.StatusCode)
+	}
+}
+
+func TestAssetsDirDefault(t *testing.T) {
+	a, _ := newCluster(t)
+	n, err := New(Options{Name: "x", Secret: testSecret, ReposDir: "/srv/forge/data/repos", Store: a.st, Git: a.git})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := n.AssetPath(&store.Repo{Owner: "alice", Name: "proj"}, "v1", "a.tgz"); got != "/srv/forge/data/assets/alice/proj/v1/a.tgz" {
+		t.Errorf("default asset path: %s", got)
+	}
+	if !validAsset("v1.0-rc1+build", "a_b.tar.gz") || validAsset("..", "a") || validAsset("v1", "..") || validAsset("v1", "../a") || validAsset("v1/x", "a") || validAsset("v1", ".hidden") || validAsset("", "a") {
+		t.Error("validAsset")
+	}
 }

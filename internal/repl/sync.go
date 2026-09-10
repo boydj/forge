@@ -260,9 +260,6 @@ func (n *Node) syncRepoFrom(ctx context.Context, peer, addr string, rp *store.Re
 	updated, pushed := fmtTime(rp.UpdatedAt), fmtTime(rp.PushedAt)
 	needGit := touched || prev == nil || prev.Status != store.ReplicaOK || prev.LeaderPushedAt != pushed
 	needMeta := touched || prev == nil || prev.Status != store.ReplicaOK || prev.LeaderUpdatedAt != updated
-	if !needGit && !needMeta {
-		return nil
-	}
 	cursor, _ := n.opts.Store.ReplCursor(ctx, peer)
 	rec := &store.Replica{RepoID: rp.ID, Node: n.opts.Name, LastEventID: cursor, LeaderUpdatedAt: updated, LeaderPushedAt: pushed}
 	fail := func(err error) error {
@@ -285,6 +282,16 @@ func (n *Node) syncRepoFrom(ctx context.Context, peer, addr string, rp *store.Re
 		if err := n.opts.Store.ApplyRepoMetadata(ctx, rp.ID, md); err != nil {
 			return fail(fmt.Errorf("metadata: %w", err))
 		}
+	}
+	// Release asset files follow the metadata rows: a full sha256 check of
+	// every file when the snapshot was (re-)applied, a cheap existence and
+	// size check every other cycle. Failures are recorded on the replica row
+	// (the rows above are already applied) and retried next cycle.
+	if err := n.syncAssets(ctx, peer, rp, needMeta); err != nil {
+		return fail(fmt.Errorf("assets: %w", err))
+	}
+	if !needGit && !needMeta {
+		return nil
 	}
 	rec.Status, rec.Detail = store.ReplicaOK, ""
 	if err := n.opts.Store.SetReplica(ctx, rec); err != nil {
