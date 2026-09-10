@@ -219,7 +219,7 @@ func (s *Server) newSSHConfig() *ssh.ServerConfig {
 }
 
 // minRSABits is the smallest RSA modulus accepted for client keys.
-const minRSABits = 3072
+const minRSABits = 2048
 
 // publicKeyCallback resolves the account for an offered key. The login
 // name is ignored. Every failure maps to the same error so a client cannot

@@ -91,6 +91,25 @@ func (m *testMetrics) snapshot() ([]string, int) {
 	return append([]string(nil), m.sessions...), m.conns
 }
 
+// syncBuffer is a goroutine-safe log sink: server goroutines keep logging
+// (connection teardown) after a client command has returned.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // --- fixtures ---------------------------------------------------------
 
 func gitEnv(home string) []string {
@@ -142,7 +161,7 @@ type testEnv struct {
 	auth    *testAuth
 	metrics *testMetrics
 	keyPath string // alice's private key (OpenSSH format)
-	logs    *bytes.Buffer
+	logs    *syncBuffer
 }
 
 func writeClientKey(t *testing.T, path string) ssh.PublicKey {
@@ -184,7 +203,7 @@ func newTestEnv(t *testing.T, opts ...func(*Config)) *testEnv {
 	keyPath := filepath.Join(dir, "alice_ed25519")
 	auth.add(writeClientKey(t, keyPath), &Account{ID: 7, Name: "alice"})
 
-	logs := &bytes.Buffer{}
+	logs := &syncBuffer{}
 	metrics := &testMetrics{}
 	srv := &Server{
 		Config: Config{
@@ -452,15 +471,20 @@ func TestShellAndNonGitExecRefused(t *testing.T) {
 	requireSSH(t)
 	e := newTestEnv(t)
 	// Plain login: the client requests a shell.
-	// OpenSSH exits 255 itself when the shell request is refused.
+	// OpenSSH exits 255 itself when the shell request is refused. Whether
+	// it flushes the stderr explanation before exiting is client timing;
+	// TestGoClientRestrictions checks the message deterministically.
 	out, code, _ := e.ssh(e.keyPath, []string{"-T"})
-	if code == 0 || !strings.Contains(out, "interactive shell not available") {
+	if code == 0 || !strings.Contains(out, "shell request failed") {
 		t.Errorf("shell: code=%d out=%q", code, out)
 	}
 	// With a pty request first (also refused).
 	out, code, _ = e.ssh(e.keyPath, []string{"-tt"})
 	if code == 0 || !strings.Contains(out, "PTY allocation request failed") {
 		t.Errorf("shell with pty: code=%d out=%q", code, out)
+	}
+	if n := strings.Count(e.logs.String(), "ssh shell refused"); n != 2 {
+		t.Errorf("server refused %d shells, want 2", n)
 	}
 	// Exec of a non-git command.
 	out, code, _ = e.ssh(e.keyPath, nil, "true")

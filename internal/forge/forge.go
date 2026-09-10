@@ -26,6 +26,8 @@ type Forge struct {
 	Store  *store.Store
 	Git    *gitvcs.Backend
 	Log    *slog.Logger
+	// OnPush, when set, is called after a successful push (replication).
+	OnPush func(r *store.Repo)
 }
 
 // Errors.

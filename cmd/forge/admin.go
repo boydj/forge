@@ -179,7 +179,7 @@ func adminUser(ctx context.Context, app *forge.Forge, args []string) error {
 	case "create":
 		fs := flag.NewFlagSet("user create", flag.ContinueOnError)
 		admin := fs.Bool("admin", false, "grant administrator")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseMixed(fs, args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
@@ -206,7 +206,7 @@ func adminUser(ctx context.Context, app *forge.Forge, args []string) error {
 	case "admin":
 		fs := flag.NewFlagSet("user admin", flag.ContinueOnError)
 		revoke := fs.Bool("revoke", false, "remove administrator")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseMixed(fs, args[1:]); err != nil {
 			return err
 		}
 		u, err := app.Store.UserByName(ctx, fs.Arg(0))
@@ -328,6 +328,31 @@ func adminCert(ctx context.Context, app *forge.Forge, args []string) error {
 	return fmt.Errorf("cert: unknown subcommand %q", args[0])
 }
 
+// parseMixed parses flags that may appear after positional arguments.
+func parseMixed(fs *flag.FlagSet, args []string) error {
+	var flags, pos []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") && a != "-" {
+			flags = append(flags, a)
+			if !strings.Contains(a, "=") {
+				name := strings.TrimLeft(a, "-")
+				if f := fs.Lookup(name); f != nil {
+					if b, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
+						if i+1 < len(args) {
+							i++
+							flags = append(flags, args[i])
+						}
+					}
+				}
+			}
+			continue
+		}
+		pos = append(pos, a)
+	}
+	return fs.Parse(append(flags, pos...))
+}
+
 func splitRepo(s string) (string, string, error) {
 	s = strings.TrimPrefix(s, "~")
 	owner, name, ok := strings.Cut(s, "/")
@@ -357,7 +382,7 @@ func adminRepo(ctx context.Context, app *forge.Forge, args []string) error {
 		fs := flag.NewFlagSet("repo create", flag.ContinueOnError)
 		private := fs.Bool("private", false, "private repository")
 		desc := fs.String("description", "", "description")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseMixed(fs, args[1:]); err != nil {
 			return err
 		}
 		owner, name, err := splitRepo(fs.Arg(0))

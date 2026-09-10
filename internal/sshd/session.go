@@ -83,6 +83,7 @@ func (s *session) run(reqs <-chan *ssh.Request) {
 				continue
 			}
 			// Explain first so the message is displayed, then refuse.
+			s.log.Info("ssh shell refused")
 			s.stderr("forge: interactive shell not available; use git")
 			s.reply(req, false)
 			s.execDone = make(chan struct{})
