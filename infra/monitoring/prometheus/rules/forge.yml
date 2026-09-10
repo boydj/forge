@@ -1,0 +1,301 @@
+# Alert rules for the forge fleet. Every target carries `pop` and `node`
+# labels (set in prometheus.yml.tftpl), so rules aggregate on those rather
+# than on `instance`. Severities: page (someone should look now), warn (next
+# working day). Runbook pointers are in docs/monitoring.md; the `runbook`
+# annotation names the section to read.
+#
+# Semantics to keep in mind (docs/health.md):
+#   forge_healthy       1 when the last 10 s cycle passed every self-check
+#   forge_bgp_announced 1 only in state `announced`; 0 while drained/withdrawn
+# A drained node still exports a prepended route, so "not announced" is not
+# "unreachable"; the reachability alerts below (blackbox) cover that.
+groups:
+  - name: forge-availability
+    rules:
+      - alert: ForgeDown
+        expr: up{job="forge"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "forge on {{ $labels.node }} is not scrapeable"
+          description: "Prometheus cannot reach {{ $labels.instance }} (job forge) for 2m: the daemon is down, wg0 is down on either side, or the metrics listener moved. The health worker withdraws a dead POP by itself after ~60 s; check `systemctl status forge` and `wg show`."
+          runbook: "docs/monitoring.md#forgedown"
+
+      - alert: ForgeUnhealthy
+        expr: forge_healthy == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.node }} failing health checks for 2m"
+          description: "The health worker on {{ $labels.node }} reports unhealthy (gemini, ssh, disk, db or replica check). `gemini://<node>/status` and `forge admin pop status` name the failing check. Drain happens after 30 s, withdraw after 60 s of failure."
+          runbook: "docs/health.md#checks"
+
+      - alert: ForgeNotAnnounced
+        expr: forge_healthy == 1 and forge_bgp_announced == 0
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} healthy but not announcing for 10m"
+          description: "Pinned by an operator (`forge admin pop drain|withdraw`), in a long flap cooldown (up to 900 s), or bgp-announce failing (daemon log: 'bgp transition failed'). Harmless during planned maintenance; otherwise `forge admin pop undrain`."
+          runbook: "docs/health.md#operator-overrides"
+
+      - alert: ForgeAnnouncedButUnhealthy
+        expr: forge_healthy == 0 and forge_bgp_announced == 1
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.node }} announcing while unhealthy: drain is not taking effect"
+          description: "After 3 failed cycles the controller should have drained. If it did not, bgp-announce or birdc is failing; drain by hand (`scripts/bgp-announce drain`) after pinning the controller."
+          runbook: "docs/health.md#failure-of-the-script-itself"
+
+      - alert: ForgeFlapping
+        expr: changes(forge_bgp_announced[1h]) >= 4
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} changed announcement state {{ $value }} times in 1h"
+          description: "The hysteresis should make repeated exits rarer, not more frequent. Look for a check that fails intermittently (disk near DiskMin, slow SQLite checkpoint, mesh loss)."
+          runbook: "docs/health.md#flap-backoff"
+
+      - alert: ForgeAllPopsWithdrawn
+        expr: sum(forge_bgp_announced) == 0 or absent(forge_bgp_announced)
+        for: 1m
+        labels: { severity: page }
+        annotations:
+          summary: "no POP is announcing the anycast prefixes"
+          description: "Every forge node reports forge_bgp_announced 0 (or none reports at all). The service addresses 44.32.58.1 / 2a0f:85c1:368:1::1 have no origin; clients see nothing. Announce the best node by hand if the health worker cannot."
+          runbook: "docs/monitoring.md#forgeallpopswithdrawn"
+
+  - name: forge-storage
+    rules:
+      - alert: ReplicaLagHigh
+        expr: forge_replica_lag_events > 100
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} is {{ $value }} events behind leader {{ $labels.leader }}"
+          description: "Replication from {{ $labels.leader }} is stuck or slow for 5m. `forge admin repl status` shows the failing repository and cause; `forge admin repl resync <id>` forces a pass. Reads on this POP are stale meanwhile."
+          runbook: "docs/replication.md#failure-modes"
+
+      - alert: BackupStale
+        expr: forge_backup_age_seconds > 36 * 3600
+        for: 30m
+        labels: { severity: warn }
+        annotations:
+          summary: "newest backup on {{ $labels.node }} is {{ $value | humanizeDuration }} old"
+          description: "forge-backup.timer runs daily at 04:45 UTC; an age above 36h means at least one run failed or did not happen. `systemctl status forge-backup` and `journalctl -u forge-backup`."
+          runbook: "docs/disaster-recovery.md#backup"
+
+      - alert: DiskLow
+        expr: forge_disk_free_bytes < 2 * 1024 * 1024 * 1024
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} has {{ $value | humanize1024 }}B free on the data filesystem"
+          description: "Below 2 GiB. At limits.min_free_bytes (1 GiB by default) pushes are refused and the health worker drains the POP. Purge deleted repositories, check /var/backups/forge retention, or grow the disk."
+          runbook: "docs/operations.md#maintenance-purge-and-quotas"
+
+  - name: forge-traffic
+    rules:
+      - alert: GeminiErrorRate
+        # Status labels are decades: 40 (temporary failure), 50 (permanent failure).
+        # Requires some traffic (> 6 req/min) so an idle node cannot trip on one error.
+        expr: |
+          (
+            sum by (pop, node) (rate(forge_gemini_requests_total{status=~"4.|5."}[5m]))
+              /
+            sum by (pop, node) (rate(forge_gemini_requests_total[5m]))
+          ) > 0.05
+          and sum by (pop, node) (rate(forge_gemini_requests_total[5m])) > 0.1
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }}: {{ $value | humanizePercentage }} of Gemini/Titan requests fail"
+          description: "More than 5% of requests answered 4x/5x for 10m. 5x with a stable path set is usually a crawler on deleted repositories (51), 4x points at the daemon (disk gate, DB errors, replica refusing writes). The `request` log line carries path and status."
+          runbook: "docs/operations.md#logs"
+
+      - alert: GeminiLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum by (pop, node, le) (rate(forge_gemini_request_seconds_bucket[5m]))) > 2
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }}: Gemini p95 latency {{ $value | humanizeDuration }}"
+          description: "p95 request time above 2 s for 10m on a service that normally answers in milliseconds. Look at CPU (git gc, maintenance timer), disk, or a large Titan upload in flight."
+          runbook: "docs/monitoring.md#gemini-latency"
+
+      - alert: GeminiConnectionsHigh
+        expr: forge_gemini_connections > 400
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} holds {{ $value }} open Gemini/Titan connections"
+          description: "Sustained high concurrency on a one-request-per-connection protocol means slow clients or an abuser; the nftables per-source limit and the daemon's own limits should keep it bounded. Check `remote` in the request log."
+          runbook: "docs/monitoring.md#abuse"
+
+      - alert: SSHSessionErrors
+        expr: |
+          (
+            sum by (pop, node) (rate(forge_ssh_sessions_total{result="error"}[10m]))
+              /
+            sum by (pop, node) (rate(forge_ssh_sessions_total[10m]))
+          ) > 0.25
+          and sum by (pop, node) (rate(forge_ssh_sessions_total[10m])) > 0.02
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }}: {{ $value | humanizePercentage }} of git SSH sessions end in error"
+          description: "A quarter of sessions failing for 10m. Pushes to a replica are refused with the leader's name (expected after a move-leader), quota refusals and hook denials also count. The `session` log line has op, repo, exit and account."
+          runbook: "docs/git-ssh.md"
+
+      - alert: HookDenialsSpike
+        # `decision` values are not final (the counter is planned); anything that
+        # is not an accept counts as a denial.
+        expr: sum by (pop, node) (increase(forge_hook_decisions_total{decision!~"allow|accept|ok"}[10m])) > 20
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }}: {{ $value }} push-hook denials in 10m"
+          description: "Bursts of denied pushes are either a misconfigured client retrying or someone probing quotas/permissions. Correlate with the `session` log (account, repo)."
+          runbook: "docs/monitoring.md#abuse"
+
+      - alert: TitanBodyBytesSpike
+        expr: rate(forge_titan_body_bytes_total[10m]) > 2 * 1024 * 1024
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} receiving {{ $value | humanize1024 }}B/s of Titan uploads for 10m"
+          description: "Sustained upload volume of more than 2 MiB/s (over a gigabyte in 10 minutes) on a 25 GB node. Titan bodies are capped at 256 MiB each and count against per-user quotas, but this is the signal to look for an abuser before DiskLow fires."
+          runbook: "docs/titan.md"
+
+  - name: bird
+    rules:
+      - alert: BirdExporterDown
+        expr: up{job="bird"} == 0
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "bird_exporter on {{ $labels.node }} is not scrapeable"
+          description: "No BGP visibility for this POP. `systemctl status prometheus-bird-exporter`; the unit requires bird.service and needs 9324 admitted on wg0."
+          runbook: "docs/monitoring.md#bird"
+
+      - alert: BirdSessionDown
+        expr: bird_protocol_up{proto="BGP"} == 0
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.node }} BGP session {{ $labels.name }} down"
+          description: "The health worker cannot see this: with BIRD down the daemon is healthy but serves nothing to the anycast catchment. `birdc show protocols all {{ $labels.name }}`; MD5 password, provider peer 169.254.169.254 / 2001:19f0:ffff::1, import limit (block after >10 routes)."
+          runbook: "docs/health.md#alert-rules"
+
+      - alert: BirdNoExportedRoutes
+        expr: |
+          bird_protocol_prefix_export_count{proto="BGP"} == 0
+            and on (pop, node) forge_bgp_announced == 1
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.node }} thinks it announces but {{ $labels.name }} exports no prefix"
+          description: "state.conf says ANNOUNCE=true yet the export filter passes nothing. `birdc show route export {{ $labels.name }}`; the static aggregate may be missing or the filter rejected it."
+          runbook: "docs/network-architecture.md#31-announcement-state-and-bgp-announce"
+
+      - alert: BirdNoImportedDefault
+        expr: bird_protocol_prefix_import_count{proto="BGP"} == 0 and bird_protocol_up{proto="BGP"} == 1
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} session {{ $labels.name }} is up but imports no default"
+          description: "The import policy expects exactly one default per family; zero for 10m means the upstream stopped sending it or the filter changed. Not user-visible by itself (the provider default is what routes), but the cheap liveness signal is gone."
+          runbook: "docs/network-architecture.md#3-bgp-policy"
+
+  - name: reachability
+    rules:
+      - alert: BlackboxExporterDown
+        expr: up{job="blackbox_exporter"} == 0
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "blackbox_exporter is down; no reachability probes"
+          runbook: "docs/monitoring.md#reachability"
+
+      - alert: AnycastUnreachableIPv4
+        expr: probe_success{target_kind="anycast", family="v4"} == 0
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary: "44.32.58.1:{{ $labels.port }} unreachable over IPv4 from the monitoring host"
+          description: "The nearest POP (from the monitor's vantage point) does not answer on the anycast address, or the /24 is not routed at all. Check the node probes: if every node probe is fine the problem is routing (RIPEstat looking glass, ForgeAllPopsWithdrawn)."
+          runbook: "docs/monitoring.md#reachability"
+
+      - alert: AnycastUnreachableIPv6
+        expr: probe_success{target_kind="anycast", family="v6"} == 0
+        for: 3m
+        labels: { severity: page }
+        annotations:
+          summary: "[2a0f:85c1:368:1::1]:{{ $labels.port }} unreachable over IPv6 from the monitoring host"
+          description: "As for IPv4. Remember the /48 may still be announced from Toronto (AS835) while that decision is open (docs/network-architecture.md section 6): a catchment landing there fails exactly like this."
+          runbook: "docs/monitoring.md#reachability"
+
+      - alert: NodeUnreachable
+        expr: probe_success{target_kind="node"} == 0
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} port {{ $labels.port }} unreachable over {{ $labels.family }} ({{ $labels.path }} address)"
+          description: "Per-POP probe failing for 5m while the daemon may still report healthy. `path=provider` failing means the node or its firewall; `path=unicast` (the /48 address) failing alone means the WireGuard backhaul from the catching POP is down."
+          runbook: "docs/monitoring.md#reachability"
+
+  - name: node
+    rules:
+      - alert: NodeExporterDown
+        expr: up{job="node"} == 0
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "node-exporter on {{ $labels.node }} is not scrapeable"
+          runbook: "docs/monitoring.md#node"
+
+      - alert: NodeHighCPU
+        expr: 1 - avg by (pop, node) (rate(node_cpu_seconds_total{mode="idle"}[5m])) > 0.9
+        for: 15m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} CPU {{ $value | humanizePercentage }} busy for 15m"
+          description: "One vCPU shared by forge (CPUQuota 90%), bird and sshd. Nightly maintenance (03:30 UTC + jitter) and backups (04:45) are expected; anything else is a clone storm or an abuser."
+          runbook: "docs/monitoring.md#node"
+
+      - alert: NodeHighMemory
+        expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes > 0.9
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} memory {{ $value | humanizePercentage }} used for 10m"
+          description: "forge is capped at 600 MB (MemoryMax); the rest of the 1 GB is bird, sshd, exporters and page cache. Sustained >90% means the OOM killer is close; forge has OOMScoreAdjust=100."
+          runbook: "docs/monitoring.md#node"
+
+      - alert: NodeDiskFill
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}[6h], 24 * 3600) < 0
+            and node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} < 5 * 1024 * 1024 * 1024
+        for: 30m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} root filesystem full within 24h at the current rate"
+          description: "Linear projection over the last 6h reaches zero within a day and less than 5 GiB is left. Backups keep 7 archives under /var/backups/forge; repositories and Titan uploads live under /var/lib/forge."
+          runbook: "docs/operations.md#maintenance-purge-and-quotas"
+
+      - alert: NodeDiskLow
+        expr: node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.10
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }} root filesystem {{ $value | humanizePercentage }} free"
+          runbook: "docs/operations.md#maintenance-purge-and-quotas"
+
+      - alert: NodeSystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed", name=~"(forge.*|bird|wg-quick@wg0|nftables|prometheus-.*)\\.service"} == 1
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.node }}: unit {{ $labels.name }} failed"
+          description: "A failed oneshot (forge-backup, forge-maintenance) stays failed until the next run; `journalctl -u {{ $labels.name }}` has the reason."
+          runbook: "docs/operations.md#systemd-units-infrasystemd"

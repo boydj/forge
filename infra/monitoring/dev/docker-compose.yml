@@ -1,0 +1,48 @@
+# Local Prometheus + Grafana against `scripts/dev-cluster up [N]` nodes.
+#
+#   scripts/dev-cluster up 3
+#   docker compose -f infra/monitoring/dev/docker-compose.yml up
+#   Prometheus http://localhost:9090   Grafana http://localhost:3000 (admin / admin)
+#
+# The dev nodes expose metrics on 127.0.0.1:9910, :9920, :9930 (dev-cluster:
+# 9900 + i*10). Containers reach the host through host.docker.internal
+# (host-gateway); on Linux this only works if the daemon listens on an address
+# the bridge can reach, so prometheus.yml uses `network_mode: host` instead and
+# scrapes 127.0.0.1 directly. Grafana stays on the bridge and talks to
+# Prometheus via host.docker.internal:9090. No BIRD, node-exporter or blackbox
+# in dev: those panels stay empty and the BGP/reachability alerts do not fire
+# (there are no series). ForgeAllPopsWithdrawn does fire in dev: every node
+# reports forge_bgp_announced 0 because no announcer is configured.
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    network_mode: host
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+  grafana:
+    image: grafana/grafana:11.6.0
+    ports:
+      - "127.0.0.1:3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+volumes:
+  prometheus-data: {}
+  grafana-data: {}

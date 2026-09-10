@@ -1,0 +1,66 @@
+# blackbox_exporter modules for the forge (Debian: prometheus-blackbox-exporter
+# 0.26.0-1 in trixie; runs on the monitoring host, :9115, loopback only).
+#
+# Each module fixes the IP family and refuses to fall back, so a v4 probe that
+# succeeds over v6 cannot mask a broken v4 path. The Gemini module goes past
+# the TCP handshake: it completes TLS (the certificate is self-signed and
+# pinned by clients, TOFU, so verification is skipped here on purpose) and
+# asks for /status, which is the same page the health worker checks
+# (docs/health.md). The SSH module reads the banner the forge sshd sends.
+#
+# Which target you point these at matters (docs/monitoring.md): the anycast
+# addresses only ever test the POP nearest to the monitoring host; the
+# per-node unicast addresses test each POP individually.
+modules:
+  gemini_v4:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      tls: true
+      tls_config:
+        insecure_skip_verify: true
+        server_name: git.as215520.net
+      query_response:
+        - send: "gemini://git.as215520.net/status\r\n"
+        - expect: "^20 "
+  gemini_v6:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip6
+      ip_protocol_fallback: false
+      tls: true
+      tls_config:
+        insecure_skip_verify: true
+        server_name: git.as215520.net
+      query_response:
+        - send: "gemini://git.as215520.net/status\r\n"
+        - expect: "^20 "
+  ssh_v4:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      query_response:
+        - expect: "^SSH-2.0-"
+  ssh_v6:
+    prober: tcp
+    timeout: 10s
+    tcp:
+      preferred_ip_protocol: ip6
+      ip_protocol_fallback: false
+      query_response:
+        - expect: "^SSH-2.0-"
+  # Plain TCP connect, for a quick "is the port open" without protocol
+  # expectations (used by hand: /probe?module=tcp_v4&target=host:port).
+  tcp_v4:
+    prober: tcp
+    timeout: 5s
+    tcp: { preferred_ip_protocol: ip4, ip_protocol_fallback: false }
+  tcp_v6:
+    prober: tcp
+    timeout: 5s
+    tcp: { preferred_ip_protocol: ip6, ip_protocol_fallback: false }

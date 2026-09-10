@@ -31,3 +31,4 @@ crash.log
 # tooling
 .mise.local.toml
 node_modules/
+.known_hosts

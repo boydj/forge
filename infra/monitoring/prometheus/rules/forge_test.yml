@@ -1,0 +1,270 @@
+# Unit tests for rules/forge.yml. Run from infra/monitoring/prometheus:
+#   promtool test rules rules/forge_test.yml
+# Samples are 30 s apart (the production scrape/evaluation interval), so
+# `0x10` is eleven samples covering 5 minutes.
+rule_files:
+  - forge.yml
+evaluation_interval: 30s
+
+tests:
+  # ForgeDown: target vanishes at 1m, `for: 2m` -> firing from 3m.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "1 1 0x10"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: ForgeDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ForgeDown
+        exp_alerts:
+          - exp_labels: { severity: page, job: forge, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9100" }
+            exp_annotations:
+              summary: "forge on ewr1 is not scrapeable"
+              description: "Prometheus cannot reach [fda5:bc65:9bb1:1::1]:9100 (job forge) for 2m: the daemon is down, wg0 is down on either side, or the metrics listener moved. The health worker withdraws a dead POP by itself after ~60 s; check `systemctl status forge` and `wg show`."
+              runbook: "docs/monitoring.md#forgedown"
+
+  # ForgeUnhealthy fires after 2m of forge_healthy == 0; a healthy node stays quiet.
+  - interval: 30s
+    input_series:
+      - series: 'forge_healthy{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "1 1 1 1 0x8"
+      - series: 'forge_healthy{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100"}'
+        values: "1x12"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ForgeUnhealthy
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: ForgeUnhealthy
+        exp_alerts:
+          - exp_labels: { severity: page, job: forge, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9100" }
+            exp_annotations:
+              summary: "ewr1 failing health checks for 2m"
+              description: "The health worker on ewr1 reports unhealthy (gemini, ssh, disk, db or replica check). `gemini://<node>/status` and `forge admin pop status` name the failing check. Drain happens after 30 s, withdraw after 60 s of failure."
+              runbook: "docs/health.md#checks"
+
+  # ForgeNotAnnounced: healthy but withdrawn/drained for 10m.
+  # ForgeAllPopsWithdrawn stays quiet because ams1 still announces.
+  - interval: 30s
+    input_series:
+      - series: 'forge_healthy{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "1x30"
+      - series: 'forge_bgp_announced{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "0x30"
+      - series: 'forge_healthy{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100"}'
+        values: "1x30"
+      - series: 'forge_bgp_announced{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100"}'
+        values: "1x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ForgeNotAnnounced
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ForgeNotAnnounced
+        exp_alerts:
+          - exp_labels: { severity: warn, job: forge, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9100" }
+            exp_annotations:
+              summary: "ewr1 healthy but not announcing for 10m"
+              description: "Pinned by an operator (`forge admin pop drain|withdraw`), in a long flap cooldown (up to 900 s), or bgp-announce failing (daemon log: 'bgp transition failed'). Harmless during planned maintenance; otherwise `forge admin pop undrain`."
+              runbook: "docs/health.md#operator-overrides"
+      - eval_time: 12m
+        alertname: ForgeAllPopsWithdrawn
+        exp_alerts: []
+
+  # ForgeAllPopsWithdrawn: every node at 0 -> page after 1m. Also fires when
+  # the metric is absent altogether (second block below).
+  - interval: 30s
+    input_series:
+      - series: 'forge_bgp_announced{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "1 1 0x10"
+      - series: 'forge_bgp_announced{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100"}'
+        values: "1 0x11"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: ForgeAllPopsWithdrawn
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: ForgeAllPopsWithdrawn
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: "no POP is announcing the anycast prefixes"
+              description: "Every forge node reports forge_bgp_announced 0 (or none reports at all). The service addresses 44.32.58.1 / 2a0f:85c1:368:1::1 have no origin; clients see nothing. Announce the best node by hand if the health worker cannot."
+              runbook: "docs/monitoring.md#forgeallpopswithdrawn"
+  - interval: 30s
+    input_series: []
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ForgeAllPopsWithdrawn
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations:
+              summary: "no POP is announcing the anycast prefixes"
+              description: "Every forge node reports forge_bgp_announced 0 (or none reports at all). The service addresses 44.32.58.1 / 2a0f:85c1:368:1::1 have no origin; clients see nothing. Announce the best node by hand if the health worker cannot."
+              runbook: "docs/monitoring.md#forgeallpopswithdrawn"
+
+  # ReplicaLagHigh: 150 events behind for > 5m; 50 behind never fires.
+  - interval: 30s
+    input_series:
+      - series: 'forge_replica_lag_events{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100", leader="ams1"}'
+        values: "150x20"
+      - series: 'forge_replica_lag_events{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100", leader="ewr1"}'
+        values: "50x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ReplicaLagHigh
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ReplicaLagHigh
+        exp_alerts:
+          - exp_labels: { severity: warn, job: forge, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9100", leader: ams1 }
+            exp_annotations:
+              summary: "ewr1 is 150 events behind leader ams1"
+              description: "Replication from ams1 is stuck or slow for 5m. `forge admin repl status` shows the failing repository and cause; `forge admin repl resync <id>` forces a pass. Reads on this POP are stale meanwhile."
+              runbook: "docs/replication.md#failure-modes"
+
+  # BackupStale: 48h old backup, held for 30m. The gauge reads 0 until the
+  # backup job populates it, which must not fire.
+  - interval: 30s
+    input_series:
+      - series: 'forge_backup_age_seconds{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "172800x70"
+      - series: 'forge_backup_age_seconds{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100"}'
+        values: "0x70"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: BackupStale
+        exp_alerts:
+          - exp_labels: { severity: warn, job: forge, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9100" }
+            exp_annotations:
+              summary: "newest backup on ewr1 is 2d 0h 0m 0s old"
+              description: "forge-backup.timer runs daily at 04:45 UTC; an age above 36h means at least one run failed or did not happen. `systemctl status forge-backup` and `journalctl -u forge-backup`."
+              runbook: "docs/disaster-recovery.md#backup"
+
+  # DiskLow: 1 GiB free < 2 GiB threshold for 5m.
+  - interval: 30s
+    input_series:
+      - series: 'forge_disk_free_bytes{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "1073741824x20"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DiskLow
+        exp_alerts:
+          - exp_labels: { severity: warn, job: forge, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9100" }
+            exp_annotations:
+              summary: "ewr1 has 1GiB free on the data filesystem"
+              description: "Below 2 GiB. At limits.min_free_bytes (1 GiB by default) pushes are refused and the health worker drains the POP. Purge deleted repositories, check /var/backups/forge retention, or grow the disk."
+              runbook: "docs/operations.md#maintenance-purge-and-quotas"
+
+  # GeminiErrorRate: 2 of every 12 requests answer 5x (16.7%) at 0.4 req/s.
+  # ams1 has the same error share but far below the traffic floor -> quiet.
+  - interval: 30s
+    input_series:
+      - series: 'forge_gemini_requests_total{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100", scheme="gemini", status="20"}'
+        values: "0+10x50"
+      - series: 'forge_gemini_requests_total{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100", scheme="gemini", status="50"}'
+        values: "0+2x50"
+      - series: 'forge_gemini_requests_total{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100", scheme="gemini", status="20"}'
+        values: "0+1x50"
+      - series: 'forge_gemini_requests_total{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100", scheme="gemini", status="50"}'
+        values: "0+0.2x50"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GeminiErrorRate
+        exp_alerts:
+          - exp_labels: { severity: warn, pop: ewr1, node: ewr1 }
+            exp_annotations:
+              summary: "ewr1: 16.67% of Gemini/Titan requests fail"
+              description: "More than 5% of requests answered 4x/5x for 10m. 5x with a stable path set is usually a crawler on deleted repositories (51), 4x points at the daemon (disk gate, DB errors, replica refusing writes). The `request` log line carries path and status."
+              runbook: "docs/operations.md#logs"
+
+  # BirdSessionDown: the v6 session drops; the v4 one stays up.
+  - interval: 30s
+    input_series:
+      - series: 'bird_protocol_up{job="bird", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9324", name="vultr6", proto="BGP", ip_version="6"}'
+        values: "1 1 0x12"
+      - series: 'bird_protocol_up{job="bird", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9324", name="vultr4", proto="BGP", ip_version="4"}'
+        values: "1x14"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: BirdSessionDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: BirdSessionDown
+        exp_alerts:
+          - exp_labels: { severity: page, job: bird, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9324", name: vultr6, proto: BGP, ip_version: "6" }
+            exp_annotations:
+              summary: "ewr1 BGP session vultr6 down"
+              description: "The health worker cannot see this: with BIRD down the daemon is healthy but serves nothing to the anycast catchment. `birdc show protocols all vultr6`; MD5 password, provider peer 169.254.169.254 / 2001:19f0:ffff::1, import limit (block after >10 routes)."
+              runbook: "docs/health.md#alert-rules"
+
+  # BirdNoExportedRoutes: only when the node believes it is announced.
+  - interval: 30s
+    input_series:
+      - series: 'bird_protocol_prefix_export_count{job="bird", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9324", name="vultr4", proto="BGP", ip_version="4"}'
+        values: "0x20"
+      - series: 'forge_bgp_announced{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100"}'
+        values: "1x20"
+      - series: 'bird_protocol_prefix_export_count{job="bird", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9324", name="vultr4", proto="BGP", ip_version="4"}'
+        values: "0x20"
+      - series: 'forge_bgp_announced{job="forge", pop="ams1", node="ams1", instance="[fda5:bc65:9bb1:1::2]:9100"}'
+        values: "0x20"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BirdNoExportedRoutes
+        exp_alerts:
+          - exp_labels: { severity: page, job: bird, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9324", name: vultr4, proto: BGP, ip_version: "4" }
+            exp_annotations:
+              summary: "ewr1 thinks it announces but vultr4 exports no prefix"
+              description: "state.conf says ANNOUNCE=true yet the export filter passes nothing. `birdc show route export vultr4`; the static aggregate may be missing or the filter rejected it."
+              runbook: "docs/network-architecture.md#31-announcement-state-and-bgp-announce"
+
+  # Reachability: anycast v4 Gemini fails (page), one node's provider v6 SSH
+  # fails (warn); the rest are fine.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="blackbox_gemini_v4", instance="44.32.58.1:1965", target_kind="anycast", pop="anycast", node="anycast", family="v4", port="1965"}'
+        values: "1 0x12"
+      - series: 'probe_success{job="blackbox_gemini_v6", instance="[2a0f:85c1:368:1::1]:1965", target_kind="anycast", pop="anycast", node="anycast", family="v6", port="1965"}'
+        values: "1x13"
+      - series: 'probe_success{job="blackbox_ssh_v6", instance="[2001:db8::2]:22", target_kind="node", pop="ams1", node="ams1", family="v6", port="22", path="provider"}'
+        values: "0x13"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AnycastUnreachableIPv4
+        exp_alerts:
+          - exp_labels: { severity: page, job: blackbox_gemini_v4, instance: "44.32.58.1:1965", target_kind: anycast, pop: anycast, node: anycast, family: v4, port: "1965" }
+            exp_annotations:
+              summary: "44.32.58.1:1965 unreachable over IPv4 from the monitoring host"
+              description: "The nearest POP (from the monitor's vantage point) does not answer on the anycast address, or the /24 is not routed at all. Check the node probes: if every node probe is fine the problem is routing (RIPEstat looking glass, ForgeAllPopsWithdrawn)."
+              runbook: "docs/monitoring.md#reachability"
+      - eval_time: 5m
+        alertname: AnycastUnreachableIPv6
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: NodeUnreachable
+        exp_alerts:
+          - exp_labels: { severity: warn, job: blackbox_ssh_v6, instance: "[2001:db8::2]:22", target_kind: node, pop: ams1, node: ams1, family: v6, port: "22", path: provider }
+            exp_annotations:
+              summary: "ams1 port 22 unreachable over v6 (provider address)"
+              description: "Per-POP probe failing for 5m while the daemon may still report healthy. `path=provider` failing means the node or its firewall; `path=unicast` (the /48 address) failing alone means the WireGuard backhaul from the catching POP is down."
+              runbook: "docs/monitoring.md#reachability"
+
+  # NodeHighMemory: 95% used for 10m.
+  - interval: 30s
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{job="node", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9101"}'
+        values: "50000000x30"
+      - series: 'node_memory_MemTotal_bytes{job="node", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9101"}'
+        values: "1000000000x30"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: NodeHighMemory
+        exp_alerts:
+          - exp_labels: { severity: warn, job: node, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9101" }
+            exp_annotations:
+              summary: "ewr1 memory 95% used for 10m"
+              description: "forge is capped at 600 MB (MemoryMax); the rest of the 1 GB is bird, sshd, exporters and page cache. Sustained >90% means the OOM killer is close; forge has OOMScoreAdjust=100."
+              runbook: "docs/monitoring.md#node"

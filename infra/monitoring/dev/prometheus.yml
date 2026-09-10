@@ -1,0 +1,22 @@
+# Dev Prometheus: scrapes the scripts/dev-cluster nodes on localhost and loads
+# the production rules. Keep the `pop`/`node` labels: the rules and the
+# dashboard aggregate on them.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels: { monitor: forge-dev, pop: dev, node: dev }
+rule_files:
+  - /etc/prometheus/rules/*.yml
+scrape_configs:
+  - job_name: forge
+    static_configs:
+      - targets: ["127.0.0.1:9910"]
+        labels: { pop: dev, node: n1 }
+      - targets: ["127.0.0.1:9920"]
+        labels: { pop: dev, node: n2 }
+      - targets: ["127.0.0.1:9930"]
+        labels: { pop: dev, node: n3 }
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+        labels: { pop: dev, node: dev }

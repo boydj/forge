@@ -1,0 +1,153 @@
+# Prometheus configuration for the forge fleet. OpenTofu `templatefile()` input;
+# see docs/monitoring.md for the variables and for how to render it by hand.
+#
+# Variables:
+#   monitor_pop, monitor_node   identity of the host running this Prometheus
+#                               (becomes external_labels, so alerts and remote
+#                               writes say which collector saw them)
+#   service_hostname            git.as215520.net (sent in the Gemini probe)
+#   anycast_v4, anycast_v6      44.32.58.1, 2a0f:85c1:368:1::1
+#   blackbox_address            where blackbox_exporter listens (127.0.0.1:9115)
+#   alertmanager_targets        list of host:port, may be empty
+#   pops                        list of objects from infra/network/address-plan.yaml
+#                               (+ OpenTofu outputs):
+#                                 name          ewr1
+#                                 wg_address    fda5:bc65:9bb1:1::1   (metrics live here)
+#                                 unicast_v6    2a0f:85c1:368:101::1  (from the /48)
+#                                 provider_ipv4 provider address (per-POP unicast v4)
+#                                 provider_ipv6 provider address
+#                               Only POPs with the `forge` role belong here; lab
+#                               is excluded by the caller.
+#
+# Every forge/node/bird target is reached over the WireGuard mesh: the
+# monitoring host must be a mesh member and the node firewall only admits
+# 9100/9101/9324 on wg0 (infra/firewall/nftables.conf.tftpl, PRIVATE_TCP).
+# Blackbox targets are the public addresses and deliberately go out the
+# monitoring host's public interface.
+
+global:
+  scrape_interval: 30s
+  scrape_timeout: 10s
+  evaluation_interval: 30s
+  external_labels:
+    monitor: forge
+    pop: "${monitor_pop}"
+    node: "${monitor_node}"
+
+rule_files:
+  - rules/*.yml
+
+%{ if length(alertmanager_targets) > 0 ~}
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+%{ for t in alertmanager_targets ~}
+            - "${t}"
+%{ endfor ~}
+%{ endif ~}
+
+scrape_configs:
+  # forge daemon: /metrics on the wg0 address, port 9100 (forge.toml [metrics]).
+  - job_name: forge
+    metrics_path: /metrics
+    static_configs:
+%{ for pop in pops ~}
+      - targets: ["[${pop.wg_address}]:9100"]
+        labels: { pop: "${pop.name}", node: "${pop.name}" }
+%{ endfor ~}
+
+  # prometheus-node-exporter (Debian package), :9101 (forge owns :9100).
+  - job_name: node
+    static_configs:
+%{ for pop in pops ~}
+      - targets: ["[${pop.wg_address}]:9101"]
+        labels: { pop: "${pop.name}", node: "${pop.name}" }
+%{ endfor ~}
+
+  # bird_exporter (Debian: prometheus-bird-exporter), :9324, unit in
+  # infra/monitoring/bird-exporter.service. Protocol names come from
+  # infra/bird/generated/<pop>/bird.conf: vultr4, vultr6 (proto="BGP").
+  - job_name: bird
+    static_configs:
+%{ for pop in pops ~}
+      - targets: ["[${pop.wg_address}]:9324"]
+        labels: { pop: "${pop.name}", node: "${pop.name}" }
+%{ endfor ~}
+
+  # The exporters' own health.
+  - job_name: prometheus
+    static_configs:
+      - targets: ["127.0.0.1:9090"]
+        labels: { pop: "${monitor_pop}", node: "${monitor_node}" }
+  - job_name: blackbox_exporter
+    static_configs:
+      - targets: ["${blackbox_address}"]
+        labels: { pop: "${monitor_pop}", node: "${monitor_node}" }
+
+  # --- Reachability from the outside (blackbox_exporter, infra/monitoring/blackbox.yml).
+  #
+  # Anycast targets: the probe lands on whichever POP is nearest to the
+  # monitoring host, so probe_success on them means "the service is reachable
+  # from here", not "every POP works". Node targets are the per-POP unicast
+  # addresses: provider IPv4/IPv6 (mesh-independent) and the POP's /48 unicast
+  # address (reaches the POP through the anycast catchment plus the WireGuard
+  # backhaul, so it also tests the mesh). Those are the per-node signal.
+  # target_kind: anycast | node; family: v4 | v6; port: 1965 | 22.
+  - job_name: blackbox_gemini_v4
+    metrics_path: /probe
+    params: { module: [gemini_v4] }
+    static_configs:
+      - targets: ["${anycast_v4}:1965"]
+        labels: { target_kind: anycast, pop: anycast, node: anycast, family: v4, port: "1965" }
+%{ for pop in pops ~}
+      - targets: ["${pop.provider_ipv4}:1965"]
+        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v4, port: "1965", path: provider }
+%{ endfor ~}
+    relabel_configs: &blackbox_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__address__]
+        target_label: instance
+      - target_label: __address__
+        replacement: "${blackbox_address}"
+
+  - job_name: blackbox_gemini_v6
+    metrics_path: /probe
+    params: { module: [gemini_v6] }
+    static_configs:
+      - targets: ["[${anycast_v6}]:1965"]
+        labels: { target_kind: anycast, pop: anycast, node: anycast, family: v6, port: "1965" }
+%{ for pop in pops ~}
+      - targets: ["[${pop.provider_ipv6}]:1965"]
+        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "1965", path: provider }
+      - targets: ["[${pop.unicast_v6}]:1965"]
+        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "1965", path: unicast }
+%{ endfor ~}
+    relabel_configs: *blackbox_relabel
+
+  - job_name: blackbox_ssh_v4
+    metrics_path: /probe
+    params: { module: [ssh_v4] }
+    static_configs:
+      - targets: ["${anycast_v4}:22"]
+        labels: { target_kind: anycast, pop: anycast, node: anycast, family: v4, port: "22" }
+%{ for pop in pops ~}
+      - targets: ["${pop.provider_ipv4}:22"]
+        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v4, port: "22", path: provider }
+%{ endfor ~}
+    relabel_configs: *blackbox_relabel
+
+  - job_name: blackbox_ssh_v6
+    metrics_path: /probe
+    params: { module: [ssh_v6] }
+    static_configs:
+      - targets: ["[${anycast_v6}]:22"]
+        labels: { target_kind: anycast, pop: anycast, node: anycast, family: v6, port: "22" }
+%{ for pop in pops ~}
+      - targets: ["[${pop.provider_ipv6}]:22"]
+        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "22", path: provider }
+      - targets: ["[${pop.unicast_v6}]:22"]
+        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "22", path: unicast }
+%{ endfor ~}
+    relabel_configs: *blackbox_relabel

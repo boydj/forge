@@ -1,0 +1,78 @@
+# bird_exporter (github.com/czerwonk/bird_exporter) for the forge POPs.
+#
+# Debian trixie ships it as `prometheus-bird-exporter` (1.4.2+ds-2, depends on
+# bird2 | bird3), so add that package to the cloud-init `packages:` list next
+# to prometheus-node-exporter; nothing is fetched from GitHub. The package
+# installs /usr/bin/prometheus-bird-exporter and its own unit; this file is
+# installed by scripts/deploy as
+#   /etc/systemd/system/prometheus-bird-exporter.service
+# which takes precedence over the packaged /lib/systemd/system unit (same
+# name), so `systemctl enable --now prometheus-bird-exporter` picks this one.
+#
+# Listens on :9324 (the exporter's default). The host firewall only admits
+# mesh-only ports on wg0 (infra/firewall/nftables.conf.tftpl, PRIVATE_TCP), so
+# 9324 must be added to that list next to 9100/9101 before Prometheus can
+# scrape it; until then the port is unreachable from everywhere, which is the
+# safe failure.
+#
+# Metrics used by infra/monitoring/prometheus/rules/forge.yml:
+#   bird_protocol_up{name="vultr4|vultr6",proto="BGP",ip_version="4|6"}
+#   bird_protocol_prefix_export_count / bird_protocol_prefix_import_count
+# (new format, the default since 1.3; -format.new is passed explicitly).
+[Unit]
+Description=Prometheus exporter for BIRD (forge)
+Documentation=https://github.com/czerwonk/bird_exporter
+After=network-online.target bird.service
+Wants=network-online.target
+# No point running without BIRD; bird.service is Required so a masked/absent
+# BIRD (non-BGP node) leaves this unit inactive instead of crash-looping.
+Requires=bird.service
+ConditionPathExists=/usr/bin/prometheus-bird-exporter
+
+[Service]
+Type=simple
+# Debian's bird2 creates /run/bird/bird.ctl as bird:bird 0660; the exporter
+# needs read/write on it, hence the supplementary group rather than root.
+DynamicUser=yes
+SupplementaryGroups=bird
+ExecStart=/usr/bin/prometheus-bird-exporter \
+    -web.listen-address=:9324 \
+    -bird.v2 \
+    -bird.socket=/run/bird/bird.ctl \
+    -format.new \
+    -proto.bgp -proto.static -proto.kernel -proto.device \
+    -proto.ospf=false -proto.babel=false -proto.rip=false -proto.direct=false
+Restart=on-failure
+RestartSec=5
+
+# Sized like the other sidecars on a 1 GB node.
+MemoryMax=64M
+CPUQuota=20%
+TasksMax=32
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
