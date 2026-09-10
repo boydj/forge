@@ -1,0 +1,475 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"as215520.net/forge/internal/config"
+	"as215520.net/forge/internal/forge"
+	"as215520.net/forge/internal/store"
+)
+
+func adminUsage() {
+	fmt.Fprint(os.Stderr, `usage: forge admin [--config FILE] <command>
+
+  init         --data DIR --hostname NAME [--node NAME] [--write-config FILE]
+  status
+  user list | user create NAME [--admin] | user disable NAME | user enable NAME | user admin NAME [--revoke]
+  key add USER FILE | key list USER | key revoke FINGERPRINT
+  cert list USER | cert revoke SPKI | cert enrol-code USER
+  repo list | repo create OWNER/NAME [--private] [--description TEXT]
+  repo delete OWNER/NAME | repo restore OWNER/NAME | repo check OWNER/NAME | repo size OWNER/NAME
+  maintenance
+  backup --out FILE
+`)
+}
+
+func runAdmin(args []string) error {
+	fs := flag.NewFlagSet("admin", flag.ContinueOnError)
+	cfgPath := fs.String("config", envOr("FORGE_CONFIG", ""), "configuration file")
+	fs.Usage = adminUsage
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		adminUsage()
+		return errors.New("command required")
+	}
+	if rest[0] == "init" {
+		return adminInit(rest[1:])
+	}
+	if *cfgPath == "" {
+		*cfgPath = "/etc/forge/forge.toml"
+	}
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		return err
+	}
+	cfg.LogLevel = "warn"
+	log := newLogger(cfg)
+	ctx := context.Background()
+	app, err := openForge(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer app.Store.Close()
+	if err := app.EnsureDirs(); err != nil {
+		return err
+	}
+	switch rest[0] {
+	case "status":
+		return adminStatus(ctx, app)
+	case "user":
+		return adminUser(ctx, app, rest[1:])
+	case "key":
+		return adminKey(ctx, app, rest[1:])
+	case "cert":
+		return adminCert(ctx, app, rest[1:])
+	case "repo":
+		return adminRepo(ctx, app, rest[1:])
+	case "maintenance":
+		return adminMaintenance(ctx, app)
+	case "backup":
+		return adminBackup(ctx, app, rest[1:])
+	default:
+		adminUsage()
+		return fmt.Errorf("unknown command %q", rest[0])
+	}
+}
+
+func adminInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	data := fs.String("data", "/var/lib/forge", "data directory")
+	host := fs.String("hostname", "", "public hostname (required)")
+	node := fs.String("node", "local", "node name")
+	title := fs.String("title", "forge", "forge title")
+	out := fs.String("write-config", "", "write configuration to this file")
+	geminiListen := fs.String("gemini-listen", ":1965", "comma-separated Gemini listen addresses")
+	sshListen := fs.String("ssh-listen", ":22", "comma-separated SSH listen addresses")
+	sshPort := fs.Int("ssh-port", 0, "public SSH port for clone URLs (default from listen address)")
+	geminiPort := fs.Int("gemini-port", 0, "public Gemini port for URLs")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *host == "" {
+		return errors.New("--hostname is required")
+	}
+	abs, err := filepath.Abs(*data)
+	if err != nil {
+		return err
+	}
+	cfg := config.Default(abs)
+	cfg.Hostname, cfg.Node, cfg.Title = *host, *node, *title
+	cfg.Gemini.Listen = strings.Split(*geminiListen, ",")
+	cfg.SSH.Listen = strings.Split(*sshListen, ",")
+	if *sshPort != 0 {
+		cfg.SSH.Port = *sshPort
+	} else if _, p, ok := strings.Cut(cfg.SSH.Listen[0], ":"); ok {
+		fmt.Sscanf(p, "%d", &cfg.SSH.Port)
+	}
+	if *geminiPort != 0 {
+		cfg.Gemini.Port = *geminiPort
+	} else if _, p, ok := strings.Cut(cfg.Gemini.Listen[0], ":"); ok {
+		fmt.Sscanf(p, "%d", &cfg.Gemini.Port)
+	}
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(abs, 0o750); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	log := newLogger(cfg)
+	app, err := openForge(ctx, cfg, log)
+	if err != nil {
+		return err
+	}
+	defer app.Store.Close()
+	if err := app.EnsureDirs(); err != nil {
+		return err
+	}
+	if *out != "" {
+		if err := cfg.Write(*out); err != nil {
+			return err
+		}
+		fmt.Println("wrote", *out)
+	}
+	fmt.Println("initialised", abs)
+	return nil
+}
+
+func adminStatus(ctx context.Context, app *forge.Forge) error {
+	ver, _ := app.Store.SchemaVersion(ctx)
+	users, _ := app.Store.CountUsers(ctx)
+	repos, _ := app.Store.AllRepos(ctx)
+	free, _ := app.FreeDisk()
+	var total int64
+	for _, r := range repos {
+		total += r.SizeBytes
+	}
+	fmt.Printf("node:        %s\nhostname:    %s\ndata:        %s\nschema:      v%d\nusers:       %d\nrepos:       %d (%d bytes)\ndisk free:   %d bytes\ngit:         %s\n",
+		app.Config.Node, app.Config.Hostname, app.Config.DataDir, ver, users, len(repos), total, free, app.Git.Version(ctx))
+	return nil
+}
+
+func adminUser(ctx context.Context, app *forge.Forge, args []string) error {
+	if len(args) == 0 {
+		return errors.New("user: subcommand required")
+	}
+	switch args[0] {
+	case "list":
+		users, err := app.Store.ListUsers(ctx, 10000, 0)
+		if err != nil {
+			return err
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tNAME\tADMIN\tDISABLED\tCREATED")
+		for _, u := range users {
+			fmt.Fprintf(tw, "%d\t%s\t%v\t%v\t%s\n", u.ID, u.Name, u.Admin, u.Disabled, u.CreatedAt.Format("2006-01-02"))
+		}
+		return tw.Flush()
+	case "create":
+		fs := flag.NewFlagSet("user create", flag.ContinueOnError)
+		admin := fs.Bool("admin", false, "grant administrator")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 1 {
+			return errors.New("user create NAME")
+		}
+		if err := forge.ValidUserName(fs.Arg(0)); err != nil {
+			return err
+		}
+		u, err := app.Store.CreateUser(ctx, fs.Arg(0), *admin)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("created user %s (id %d)\n", u.Name, u.ID)
+		return nil
+	case "disable", "enable":
+		if len(args) != 2 {
+			return errors.New("user disable|enable NAME")
+		}
+		u, err := app.Store.UserByName(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		return app.Store.SetUserDisabled(ctx, u.ID, args[0] == "disable")
+	case "admin":
+		fs := flag.NewFlagSet("user admin", flag.ContinueOnError)
+		revoke := fs.Bool("revoke", false, "remove administrator")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		u, err := app.Store.UserByName(ctx, fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		return app.Store.SetUserAdmin(ctx, u.ID, !*revoke)
+	}
+	return fmt.Errorf("user: unknown subcommand %q", args[0])
+}
+
+func adminKey(ctx context.Context, app *forge.Forge, args []string) error {
+	if len(args) == 0 {
+		return errors.New("key: subcommand required")
+	}
+	switch args[0] {
+	case "add":
+		if len(args) != 3 {
+			return errors.New("key add USER FILE")
+		}
+		u, err := app.Store.UserByName(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		data, err := os.ReadFile(args[2])
+		if err != nil {
+			return err
+		}
+		keys, err := app.AddSSHKeys(ctx, u, string(data))
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			fmt.Println("added", k.Fingerprint)
+		}
+		return nil
+	case "list":
+		if len(args) != 2 {
+			return errors.New("key list USER")
+		}
+		u, err := app.Store.UserByName(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		keys, err := app.Store.ListSSHKeys(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		for _, k := range keys {
+			state := "active"
+			if !k.RevokedAt.IsZero() {
+				state = "revoked"
+			}
+			fmt.Printf("%s %s %s %s\n", k.Fingerprint, k.KeyType, state, k.Label)
+		}
+		return nil
+	case "revoke":
+		if len(args) != 2 {
+			return errors.New("key revoke FINGERPRINT")
+		}
+		k, err := app.Store.SSHKeyByFingerprint(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		return app.Store.RevokeSSHKey(ctx, k.ID)
+	}
+	return fmt.Errorf("key: unknown subcommand %q", args[0])
+}
+
+func adminCert(ctx context.Context, app *forge.Forge, args []string) error {
+	if len(args) == 0 {
+		return errors.New("cert: subcommand required")
+	}
+	switch args[0] {
+	case "list":
+		if len(args) != 2 {
+			return errors.New("cert list USER")
+		}
+		u, err := app.Store.UserByName(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		certs, err := app.Store.ListCertificates(ctx, u.ID)
+		if err != nil {
+			return err
+		}
+		for _, c := range certs {
+			state := "active"
+			if !c.RevokedAt.IsZero() {
+				state = "revoked"
+			}
+			fmt.Printf("%s %s %s expires=%s last=%s\n", c.SPKISHA256, state, c.Label, c.NotAfter.Format("2006-01-02"), c.LastUsedAt.Format(time.RFC3339))
+		}
+		return nil
+	case "revoke":
+		if len(args) != 2 {
+			return errors.New("cert revoke SPKI")
+		}
+		c, err := app.Store.CertificateBySPKI(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		return app.Store.RevokeCertificate(ctx, c.ID)
+	case "enrol-code":
+		if len(args) != 2 {
+			return errors.New("cert enrol-code USER")
+		}
+		u, err := app.Store.UserByName(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		code, err := forge.NewEnrolmentCode(ctx, app, u)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("enrolment code for %s (valid %s): %s\n", u.Name, forge.EnrolmentTokenTTL, code)
+		return nil
+	}
+	return fmt.Errorf("cert: unknown subcommand %q", args[0])
+}
+
+func splitRepo(s string) (string, string, error) {
+	s = strings.TrimPrefix(s, "~")
+	owner, name, ok := strings.Cut(s, "/")
+	if !ok {
+		return "", "", errors.New("expected OWNER/NAME")
+	}
+	return owner, strings.TrimSuffix(name, ".git"), nil
+}
+
+func adminRepo(ctx context.Context, app *forge.Forge, args []string) error {
+	if len(args) == 0 {
+		return errors.New("repo: subcommand required")
+	}
+	switch args[0] {
+	case "list":
+		repos, err := app.Store.AllRepos(ctx)
+		if err != nil {
+			return err
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+		fmt.Fprintln(tw, "ID\tREPO\tPRIVATE\tARCHIVED\tLEADER\tSIZE\tUPDATED")
+		for _, r := range repos {
+			fmt.Fprintf(tw, "%d\t%s/%s\t%v\t%v\t%s\t%d\t%s\n", r.ID, r.Owner, r.Name, r.Private, r.Archived, r.LeaderNode, r.SizeBytes, r.UpdatedAt.Format("2006-01-02"))
+		}
+		return tw.Flush()
+	case "create":
+		fs := flag.NewFlagSet("repo create", flag.ContinueOnError)
+		private := fs.Bool("private", false, "private repository")
+		desc := fs.String("description", "", "description")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		owner, name, err := splitRepo(fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		u, err := app.Store.UserByName(ctx, owner)
+		if err != nil {
+			return err
+		}
+		r, err := app.CreateRepo(ctx, u, forge.CreateRepoOptions{Name: name, Private: *private, Description: *desc})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("created %s/%s at %s\n", r.Owner, r.Name, app.RepoPath(r.Owner, r.Name))
+		return nil
+	case "delete", "restore", "check", "size":
+		if len(args) != 2 {
+			return fmt.Errorf("repo %s OWNER/NAME", args[0])
+		}
+		owner, name, err := splitRepo(args[1])
+		if err != nil {
+			return err
+		}
+		if args[0] == "restore" {
+			repos, err := app.Store.ListDeletedRepos(ctx, time.Now().Add(time.Hour))
+			if err != nil {
+				return err
+			}
+			for _, r := range repos {
+				if r.Owner == owner && r.Name == name {
+					return app.Store.RestoreRepo(ctx, r.ID)
+				}
+			}
+			return errors.New("no such deleted repository")
+		}
+		r, err := app.Store.RepoByPath(ctx, owner, name)
+		if err != nil {
+			return err
+		}
+		switch args[0] {
+		case "delete":
+			owner, err := app.Store.UserByID(ctx, r.OwnerID)
+			if err != nil {
+				return err
+			}
+			admin := *owner
+			admin.Admin = true
+			if err := app.DeleteRepo(ctx, &admin, r, r.Owner+"/"+r.Name); err != nil {
+				return err
+			}
+			fmt.Printf("deleted %s/%s; restorable for %s with 'repo restore'\n", r.Owner, r.Name, forge.DeleteRetention)
+		case "check":
+			repo, err := app.Open(r)
+			if err != nil {
+				return err
+			}
+			if err := repo.Check(ctx); err != nil {
+				return err
+			}
+			fmt.Println("ok")
+		case "size":
+			n, err := app.RefreshSize(ctx, r)
+			if err != nil {
+				return err
+			}
+			fmt.Println(n)
+		}
+		return nil
+	}
+	return fmt.Errorf("repo: unknown subcommand %q", args[0])
+}
+
+func adminMaintenance(ctx context.Context, app *forge.Forge) error {
+	n, err := app.PurgeDeleted(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("purged %d deleted repositories\n", n)
+	if err := app.Store.PurgeTokens(ctx); err != nil {
+		return err
+	}
+	repos, err := app.Store.AllRepos(ctx)
+	if err != nil {
+		return err
+	}
+	for _, r := range repos {
+		if _, err := app.RefreshSize(ctx, r); err != nil {
+			fmt.Fprintf(os.Stderr, "size %s/%s: %v\n", r.Owner, r.Name, err)
+		}
+	}
+	fmt.Printf("refreshed %d repository sizes\n", len(repos))
+	return nil
+}
+
+func adminBackup(ctx context.Context, app *forge.Forge, args []string) error {
+	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
+	out := fs.String("out", "", "output database snapshot path (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *out == "" {
+		return errors.New("--out is required")
+	}
+	if err := os.Remove(*out); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := app.Store.Backup(ctx, *out); err != nil {
+		return err
+	}
+	fmt.Println("database snapshot written to", *out)
+	return nil
+}
+
+var _ = store.ErrNotFound

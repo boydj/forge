@@ -1,0 +1,25 @@
+# Example overrides for `scripts/netgen --overrides <file>`.
+#
+# The address plan deliberately leaves provider-assigned values null. At deploy
+# time they are produced from OpenTofu outputs (main_ip / v6_main_ip of each
+# vultr_instance) and from the nodes' own WireGuard public keys, and merged
+# over the plan with this file's shape. Values here use documentation ranges
+# (RFC 5737 / RFC 3849) so this file can be committed and used by the tests.
+#
+# Secrets are never put in an overrides file: the generated files keep
+# __BGP_MD5__ and __WG_PRIVATE_KEY__ placeholders that the deploy step fills
+# from SOPS on the node.
+pops:
+  ewr1:
+    provider_ipv4: 203.0.113.10
+    provider_ipv6: "2001:db8:1::10"
+  ams1:
+    provider_ipv4: 203.0.113.20
+    provider_ipv6: "2001:db8:2::20"
+  lab:
+    provider_ipv4: 192.0.2.254
+    provider_ipv6: "2001:db8:ffff::fe"
+wireguard:
+  public_keys:
+    ewr1: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    ams1: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="

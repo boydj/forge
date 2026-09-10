@@ -1,0 +1,284 @@
+# AS215520 address plan for the forge anycast deployment.
+#
+# This file is the single source of truth for addressing, POP membership and
+# BGP policy. `scripts/netgen` reads it and writes:
+#   infra/bird/generated/<pop>/bird.conf + state.conf   (BIRD 2)
+#   infra/wireguard/generated/<pop>/wg0.conf            (wg-quick)
+#   infra/network/generated/dns-nodes.yaml              (Cloudflare module input)
+#   infra/network/generated/nftables-vars.nft           (nftables defines)
+#   infra/network/generated/summary.md
+# `scripts/netgen --check` validates it. Provider-assigned values (main IPv4/IPv6
+# of each instance, WireGuard public keys) are NOT stored here; they come from
+# OpenTofu outputs via `scripts/netgen --overrides <file>` (see
+# infra/network/overrides.example.yaml). Secrets never live here; every secret
+# is a `sops:` reference resolved at deploy time.
+#
+# Public facts this plan relies on are in infra/network/public-state.yaml and
+# docs/network-readiness.md. Design rationale is in docs/network-architecture.md;
+# the short version is in the comments below.
+
+version: 1
+zone: as215520.net
+nodes_subdomain: nodes            # <pop>.nodes.as215520.net
+
+# ---------------------------------------------------------------------------
+# IPv6: 2a0f:85c1:368::/48 (RIPE PA, ROA valid for AS215520 maxLength 48).
+#
+# The whole /48 is announced from every POP (maxLength 48 means no
+# more-specific can ever be RPKI-valid, so there is no such thing as a
+# per-POP /64 announcement). Inside it we carve /56 "regions" and /64 subnets:
+#
+#   2a0f:85c1:368:0000::/56   anycast region
+#     :0::/64   reserved (subnet zero; the `::` address is never a service)
+#     :1::/64   anycast service addresses
+#     :2::/64 .. :ff::/64  future anycast services
+#   2a0f:85c1:368:0100::/56   per-POP unicast region, one /64 per POP:
+#     2a0f:85c1:368:1<nn>::/64 where nn = POP index (hex, 01..ff);
+#     ::1 in that /64 is the node address (SSH management, replication
+#     endpoints, `<pop>.nodes.as215520.net`, unicast tests).
+#     NOTE: these /64s are inside the anycast /48, so a packet for ewr1's
+#     /64 lands on whichever POP is nearest to the sender. Every POP therefore
+#     forwards the other POPs' unicast /64s over the WireGuard mesh
+#     (wg-quick AllowedIPs = peer mesh /128 + peer unicast /64). This is the
+#     usual "unicast inside anycast" trick; it means the mesh must be up for a
+#     far-away operator to reach a specific POP on its /48 address, so the
+#     provider address remains the fallback management path.
+#   2a0f:85c1:368:0200::/56 .. :fe00::/56   reserved for expansion
+#   2a0f:85c1:368:ff00::/56   infrastructure
+#     :fffe::/64  management / VPN (reserved, unused today)
+#     :ffff::/64  lab and tests (never announced; used in netns simulations)
+# ---------------------------------------------------------------------------
+ipv6:
+  prefix: "2a0f:85c1:368::/48"
+  regions:
+    - { prefix: "2a0f:85c1:368::/56",       purpose: anycast }
+    - { prefix: "2a0f:85c1:368:100::/56",   purpose: pop-unicast }
+    - { prefix: "2a0f:85c1:368:200::/55",   purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:400::/54",   purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:800::/53",   purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:1000::/52",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:2000::/51",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:4000::/50",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:8000::/50",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:c000::/51",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:e000::/52",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:f000::/53",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:f800::/54",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:fc00::/55",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:fe00::/56",  purpose: reserved-expansion }
+    - { prefix: "2a0f:85c1:368:ff00::/56",  purpose: infrastructure }
+  subnets:
+    - { prefix: "2a0f:85c1:368::/64",       purpose: reserved-subnet-zero }
+    - { prefix: "2a0f:85c1:368:1::/64",     purpose: anycast-services }
+    - { prefix: "2a0f:85c1:368:fffe::/64",  purpose: management-vpn-reserved }
+    - { prefix: "2a0f:85c1:368:ffff::/64",  purpose: lab-tests, announce: false }
+  # POP unicast /64s are derived: pop_unicast_template with {index:02x}.
+  pop_unicast_template: "2a0f:85c1:368:1{index:02x}::/64"
+  pop_node_host: 1                # ::1 of the POP /64 is the node address
+  services:
+    # One address for Gemini (1965), Titan (1965) and SSH (22): TOFU pinning
+    # (docs/threat-model.md T-35/T-36) wants one stable identity per hostname,
+    # the DNS module publishes a single service name (git.<zone>), and the
+    # ports already disambiguate the protocols. Separate addresses would only
+    # buy per-service traffic engineering, which anycast communities give us
+    # anyway.
+    - { name: forge, address: "2a0f:85c1:368:1::1", ports: [1965, 22], dns: git }
+    - { name: reserved-2, address: "2a0f:85c1:368:1::2", ports: [], dns: null }
+
+# ---------------------------------------------------------------------------
+# IPv4: 44.32.58.0/24 (ARDC 44Net allocation; no ROA yet; not announced today).
+#
+# A /24 is the minimum globally routable IPv4 prefix, so the whole /24 is
+# announced from every POP and every address in it is anycast by
+# construction. Per-POP unicast IPv4 out of the /24 does not work the way the
+# IPv6 /64s do unless we backhaul each /32 over the mesh as well; we do not,
+# because (a) the block is tiny, (b) IPv4 management must not depend on the
+# mesh, and (c) each Vultr instance already has a provider IPv4 that is
+# directly reachable. Per-POP unicast IPv4 is therefore the provider address
+# (`provider_ipv4`, from OpenTofu outputs), never from the /24. Without the
+# backhaul, a "unicast" address inside the /24 would only ever reach the POP
+# nearest to the client.
+# ---------------------------------------------------------------------------
+ipv4:
+  prefix: "44.32.58.0/24"
+  services:
+    - { name: forge, address: "44.32.58.1", ports: [1965, 22], dns: git }
+  reserved:
+    - { range: "44.32.58.0/32",   purpose: network-address }
+    - { range: "44.32.58.2-44.32.58.15", purpose: future-anycast-services }
+    - { range: "44.32.58.16-44.32.58.255", purpose: reserved }
+
+# ---------------------------------------------------------------------------
+# WireGuard mesh overlay. Inner addresses are ULA (RFC 4193), NOT taken from
+# the /48: mesh addresses must never be globally routed or announced, and a
+# ULA cannot leak into BGP by accident. IPv6-only mesh; every node has a
+# provider IPv6, and the forge daemon binds replication/metrics to the wg0
+# address only (docs/threat-model.md T-33). No inner IPv4 (no CGNAT /24) --
+# add one only if a service on the mesh turns out to need it.
+#
+# Global ID computed per RFC 4193 section 3.2.2 on 2026-09-10:
+#   NTP time (64-bit)   0xee4cae9304cd3400
+#   EUI-64 (modified)   0x129836fffeb28fa9   (from the generating host's MAC)
+#   SHA-1(key)          754eb8152a3e83243c438ffaf86cd9a5bc659bb1
+#   low 40 bits         0xa5bc659bb1  ->  fda5:bc65:9bb1::/48
+# ---------------------------------------------------------------------------
+wireguard:
+  ula_prefix: "fda5:bc65:9bb1::/48"
+  mesh_prefix: "fda5:bc65:9bb1:1::/64"      # subnet 1; subnet 0 reserved
+  node_address_template: "fda5:bc65:9bb1:1::{index:x}"
+  listen_port: 51820
+  mtu: 1420                                 # 1500 - 80 (IPv6 + UDP + WG overhead)
+  persistent_keepalive: 25
+  interface: wg0
+  endpoint_preference: [provider_ipv6, provider_ipv4]
+  # Public keys are per node, generated on the node and registered here (or in
+  # the overrides file) after first boot. An empty/missing entry becomes the
+  # placeholder __WG_PUBKEY_<pop>__ so configs stay valid to diff.
+  public_keys: {}
+  private_key_ref: "sops:infra/secrets/nodes/{pop}.enc.yaml#wg_private_key"
+
+# ---------------------------------------------------------------------------
+# POP registry. index is the POP number used in every derived address
+# (unicast /64 = :1<index>::/64, mesh address ::<index>); it must be unique
+# and stable for the life of the POP. Names are <iata-ish region><n>.
+# provider_ipv4 / provider_ipv6 are null here on purpose: they are filled at
+# deploy time from OpenTofu outputs through `scripts/netgen --overrides`.
+# ---------------------------------------------------------------------------
+pops:
+  - name: ewr1
+    provider: vultr
+    region: ewr                      # Vultr "New Jersey" (Piscataway)
+    index: 1
+    ipv6_unicast_block: "2a0f:85c1:368:101::/64"
+    wg_address: "fda5:bc65:9bb1:1::1"
+    wg_listen_port: 51820
+    roles: [forge, bgp, replica]
+    dns: true
+    provider_ipv4: null
+    provider_ipv6: null
+  - name: ams1
+    provider: vultr
+    region: ams                      # Vultr Amsterdam
+    index: 2
+    ipv6_unicast_block: "2a0f:85c1:368:102::/64"
+    wg_address: "fda5:bc65:9bb1:1::2"
+    wg_listen_port: 51820
+    roles: [forge, bgp, replica]
+    dns: true
+    provider_ipv4: null
+    provider_ipv6: null
+  - name: lab
+    provider: local                  # netns / VM simulation; never public
+    region: local
+    index: 254
+    ipv6_unicast_block: "2a0f:85c1:368:1fe::/64"
+    wg_address: "fda5:bc65:9bb1:1::fe"
+    wg_listen_port: 51820
+    roles: [forge, bgp, lab]
+    dns: false
+    provider_ipv4: null
+    provider_ipv6: null
+
+# ---------------------------------------------------------------------------
+# BGP policy.
+#
+# Import: Vultr offers "Default Only"; we accept exactly 0.0.0.0/0 and ::/0
+# with `import limit 10 action block` and do NOT install them in the kernel.
+# The instance already has a provider default route from DHCP/RA, so BGP is
+# used for announcement only; importing the default keeps the session
+# observable (a route count of 1 is a cheap liveness signal) without letting a
+# misconfigured upstream push a full table into a 1 GB VM.
+#
+# Export: exactly the two prefixes, sourced from BIRD static routes, gated by
+# two constants in state.conf that `bgp-announce` rewrites:
+#   ANNOUNCE=false  -> export nothing (withdraw)
+#   DRAIN=true      -> still export, but prepend own AS x3, add the provider's
+#                      prepend-x3 community and GRACEFUL_SHUTDOWN (65535:0,
+#                      RFC 8326) so traffic moves away before the withdraw.
+# 20473:6000 ("do not advertise globally") is never set anywhere; --check
+# fails if it appears.
+# ---------------------------------------------------------------------------
+bgp:
+  local_asn: 215520
+  router_id_source: provider_ipv4          # BIRD `router id`
+  hold_time: 90
+  keepalive_time: 30
+  graceful_restart: true
+  import_policy: default-only
+  import_limit: 10
+  prefixes:
+    - { prefix: "44.32.58.0/24",       family: ipv4, roa_max_length: 24 }
+    - { prefix: "2a0f:85c1:368::/48",  family: ipv6, roa_max_length: 48 }
+  drain:
+    own_prepend: 3
+    communities: ["65535:0"]                # GRACEFUL_SHUTDOWN, RFC 8326
+  upstreams:
+    vultr:
+      description: "Vultr AS20473 (session peer is the hypervisor-side AS64515)"
+      peer_asn: 64515
+      public_asn: 20473
+      peer_ipv4: "169.254.169.254"
+      peer_ipv6: "2001:19f0:ffff::1"
+      multihop: 2
+      md5_secret_ref: "sops:infra/secrets/network.enc.yaml#vultr_bgp_password"
+      export_communities: []                 # default: announce globally
+      drain_communities: ["20473:6003"]      # prepend 20473 x3 to all
+      forbidden_communities: ["20473:6000"]  # never set: do-not-advertise
+      location_communities: "20473:<2-digit POP>, 20473:0:3RRRCCC1PP (informational, on received routes)"
+    local:
+      description: "lab peer in a network namespace (private ASN)"
+      peer_asn: 64512
+      public_asn: 64512
+      peer_ipv4: "192.0.2.1"
+      peer_ipv6: "2001:db8:ffff::1"
+      multihop: 1
+      md5_secret_ref: null
+      export_communities: []
+      drain_communities: []
+      forbidden_communities: []
+  rpki_rtr:
+    # Optional. A leaf that only originates two prefixes and imports only a
+    # default has nothing to validate; the stanza is emitted commented out.
+    # rtr.rpki.cloudflare.com resolved on 2026-09-10 (172.65.0.2 /
+    # 2606:4700:60::2); port 8282 is Cloudflare's documented RTR port.
+    enabled: false
+    server: rtr.rpki.cloudflare.com
+    port: 8282
+
+# ---------------------------------------------------------------------------
+# Desired registry state (what the operator has to make true; not generated).
+# ---------------------------------------------------------------------------
+rpki:
+  roas:
+    - { prefix: "2a0f:85c1:368::/48", max_length: 48, asn: 215520, ta: RIPE, status: exists }
+    - { prefix: "44.32.58.0/24",      max_length: 24, asn: 215520, ta: ARIN,  status: missing, who: "ARDC (portal request)" }
+irr:
+  route_objects:
+    - { prefix: "2a0f:85c1:368::/48", origin: AS215520, source: RIPE, mnt_by: JOSHBOYD-MNT, status: exists }
+    - { prefix: "44.32.58.0/24",      origin: AS215520, source: RADB, mnt_by: MAINT-ARDC,   status: exists }
+  as_set:
+    name: "AS215520:AS-ALL"
+    source: RIPE
+    members: [AS215520]
+    mnt_by: JOSHBOYD-MNT
+    status: missing
+  aut_num_policy:
+    - "import: from AS20473 accept ANY; export: to AS20473 announce AS215520"
+    - "mp-import: afi ipv6.unicast from AS20473 accept ANY; mp-export: afi ipv6.unicast to AS20473 announce AS215520"
+    - "mp-import: afi ipv6.unicast from AS835 accept ANY; mp-export: afi ipv6.unicast to AS835 announce AS215520"
+peeringdb:
+  net_id: 35354
+  irr_as_set: "RIPE::AS215520:AS-ALL"
+  info_prefixes4: 1
+  info_prefixes6: 1
+  pocs: [Abuse, Technical, Policy]
+
+# Reverse DNS zones the operator must get delegated (docs/network-readiness.md
+# items 8 and 12) and the PTR naming scheme netgen would emit later.
+rdns:
+  zones:
+    - { zone: "58.32.44.in-addr.arpa",               delegate_via: "ARDC portal" }
+    - { zone: "8.6.3.0.1.c.5.8.f.0.a.2.ip6.arpa",    delegate_via: "Inferno (INFERNO-MNT domain object)" }
+  ptr:
+    service: "git.as215520.net"
+    node: "{pop}.nodes.as215520.net"

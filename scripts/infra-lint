@@ -17,10 +17,11 @@ if command -v tofu >/dev/null 2>&1; then
 else
   echo "tofu: not installed, skipping"
 fi
-if command -v bird >/dev/null 2>&1 && ls infra/bird/generated/*.conf >/dev/null 2>&1; then
-  for f in infra/bird/generated/*.conf; do bird -p -c "$f" || rc=1; done
-else
-  echo "bird: not installed or nothing generated, skipping"
+# Network plan: schema check plus generator tests (they run bird -p when
+# a bird binary is available, e.g. ~/.local/bird2/usr/sbin/bird).
+if [ -x scripts/netgen ]; then
+  scripts/netgen --check >/dev/null || { echo "netgen: plan check failed"; rc=1; }
+  python3 -m unittest discover -s tests/network -q >/dev/null 2>&1 || { echo "netgen: tests failed"; rc=1; }
 fi
 if command -v python3 >/dev/null 2>&1; then
   for f in $(find infra -name '*.yaml' -o -name '*.yml'); do

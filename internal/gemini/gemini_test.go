@@ -28,7 +28,7 @@ func TestParseRequestLine(t *testing.T) {
 		{"gemini://example.org/\x00", false, "", "", 0, "", ""},
 		{"titan://example.org/~a/r/issues/new;size=12;mime=text/plain;token=abc", true, "titan", "/~a/r/issues/new", 12, "text/plain", "abc"},
 		{"titan://example.org/~a/r/issues/new;mime=text/plain;size=5", true, "titan", "/~a/r/issues/new", 5, "text/plain", ""},
-		{"titan://example.org/~a/r/issues/new;size=5", true, "titan", "/~a/r/issues/new", 5, "text/plain", ""},
+		{"titan://example.org/~a/r/issues/new;size=5", true, "titan", "/~a/r/issues/new", 5, "text/gemini", ""},
 		{"titan://example.org/~a/r/issues/new", false, "", "", 0, "", ""},
 		{"titan://example.org/~a/r/issues/new;size=x", false, "", "", 0, "", ""},
 		{"titan://example.org/~a/r/issues/new;size=5;size=6", false, "", "", 0, "", ""},

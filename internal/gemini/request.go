@@ -135,7 +135,7 @@ func splitTitanParams(escaped string) (string, *TitanParams, error) {
 	if err != nil || strings.Contains(base, ";") {
 		return "", nil, ErrBadRequest
 	}
-	p := &TitanParams{MIME: "text/plain"}
+	p := &TitanParams{MIME: "text/gemini"}
 	seenSize := false
 	for _, kv := range strings.Split(rest, ";") {
 		k, v, ok := strings.Cut(kv, "=")
