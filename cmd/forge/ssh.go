@@ -95,13 +95,11 @@ func startSSH(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *me
 		Logger:  log.With("proto", "ssh"),
 		Metrics: reg.SSH(),
 	}
-	var listeners []net.Listener
 	for _, addr := range cfg.SSH.Listen {
 		l, err := net.Listen("tcp", addr)
 		if err != nil {
 			return nil, fmt.Errorf("ssh listen %s: %w", addr, err)
 		}
-		listeners = append(listeners, l)
 		log.Info("listening", "proto", "ssh", "addr", l.Addr())
 		go func() {
 			if err := srv.Serve(l); err != nil && !errors.Is(err, net.ErrClosed) {

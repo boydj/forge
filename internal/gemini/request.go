@@ -36,6 +36,9 @@ type TitanParams struct {
 	Size  int64
 	MIME  string
 	Token string
+	// Edit is set for "titan://host/path;edit" requests (no body): the
+	// client asks for the raw, editable representation of the resource.
+	Edit bool
 }
 
 // IsTitan reports whether the request is a Titan upload.
@@ -140,7 +143,10 @@ func splitTitanParams(escaped string) (string, *TitanParams, error) {
 	for _, kv := range strings.Split(rest, ";") {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok {
-			return "", nil, ErrBadRequest
+			if kv != "edit" {
+				return "", nil, ErrBadRequest
+			}
+			k = "edit"
 		}
 		switch k {
 		case "size":
@@ -171,11 +177,19 @@ func splitTitanParams(escaped string) (string, *TitanParams, error) {
 				return "", nil, ErrBadRequest
 			}
 			p.Token = tv
+		case "edit":
+			if v != "" && v != "1" {
+				return "", nil, ErrBadRequest
+			}
+			p.Edit = true
 		default:
 			return "", nil, ErrBadRequest
 		}
 	}
-	if !seenSize {
+	if p.Edit && seenSize {
+		return "", nil, ErrBadRequest
+	}
+	if !seenSize && !p.Edit {
 		return "", nil, ErrBadRequest
 	}
 	return base, p, nil

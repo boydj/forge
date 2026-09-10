@@ -330,9 +330,30 @@ func (h *Handler) readTitanText(req *request, limit int64) (string, bool) {
 	return strings.ReplaceAll(string(data), "\r\n", "\n"), true
 }
 
-func isValidText(b []byte) bool {
-	if isBinary(b) {
-		return false
+func isValidText(b []byte) bool { return !isBinary(b) }
+
+// titanRepo dispatches Titan writes under /~owner/name/....
+func (h *Handler) titanRepo(req *request, u *store.User, owner, name string, rest []string) {
+	acc, err := h.F.LookupRepo(req.ctx, u, owner, name)
+	if err != nil {
+		req.fail(err)
+		return
 	}
-	return true
+	rc := &repoCtx{acc: acc, base: "/~" + owner + "/" + name}
+	if len(rest) == 0 {
+		_ = gemini.NotFound(req.w)
+		return
+	}
+	switch rest[0] {
+	case "issues":
+		h.titanIssues(req, u, rc, rest[1:])
+	case "changes":
+		h.titanChanges(req, u, rc, rest[1:])
+	case "releases":
+		h.titanReleases(req, u, rc, rest[1:])
+	case "settings":
+		h.titanSettings(req, u, rc, rest[1:])
+	default:
+		_ = gemini.NotFound(req.w)
+	}
 }

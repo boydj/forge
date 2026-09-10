@@ -1,0 +1,215 @@
+#cloud-config
+# forge node bootstrap for Debian 13 (trixie). Rendered by modules/forge-node
+# (templatefile) and passed as user_data to any provider module. It creates
+# users, installs packages from Debian only (nothing is fetched from GitHub or
+# elsewhere: the forge binary and generated configs are pushed later by
+# scripts/deploy over SSH), moves OpenSSH to port ${admin_ssh_port}, writes
+# the node config and firewall, and enables the units. Files owned by the
+# forge user are chown'ed in runcmd because write_files runs before users are
+# created; files that packages also ship use `defer: true` so they are
+# written after apt has installed the package (dpkg conffile ordering).
+hostname: ${node}
+fqdn: ${hostname_fqdn}
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: true
+timezone: Etc/UTC
+locale: C.UTF-8
+
+package_update: true
+package_upgrade: true
+package_reboot_if_required: false
+packages:
+  - git
+  - bird2                       # BGP to the provider; config pushed by scripts/deploy
+  - wireguard-tools             # wg-quick@wg0; config pushed by scripts/deploy
+  - nftables
+  - curl
+  - ca-certificates
+  - age                         # node secret key; decrypts what scripts/deploy ships
+  - zstd
+  - unattended-upgrades
+  - prometheus-node-exporter    # listens on :9101 (forge metrics own :9100), wg0-only via nftables
+
+# OpenSSH: no passwords anywhere. root keeps the provider-injected bootstrap
+# key (prohibit-password); `deploy` is what scripts/deploy logs in as.
+ssh_pwauth: false
+disable_root: false
+ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]
+users:
+  - name: forge
+    system: true
+    homedir: /var/lib/forge
+    no_create_home: false
+    shell: /usr/sbin/nologin
+    lock_passwd: true
+  - name: deploy
+    gecos: forge deploy user
+    shell: /bin/bash
+    groups: [forge]
+    lock_passwd: true
+    # TODO(hardening): restrict to a command allow-list once scripts/deploy
+    # has settled on its remote helper. Key-only login on port ${admin_ssh_port}.
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+${operator_ssh_authorized_keys}
+
+write_files:
+  # --- OpenSSH on the admin port; forge takes 22 for Git.
+  - path: /etc/ssh/sshd_config.d/10-forge.conf
+    permissions: "0644"
+    content: |
+      Port ${admin_ssh_port}
+      AddressFamily any
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PermitRootLogin prohibit-password
+      PubkeyAuthentication yes
+      AllowUsers root deploy
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding no
+      ClientAliveInterval 60
+      ClientAliveCountMax 3
+      LoginGraceTime 20
+      MaxAuthTries 4
+
+  # --- Anycast / BYOIP service addresses on a dummy interface, via
+  # systemd-networkd. Only dummy0 has a .network file, so networkd leaves the
+  # provider NIC to whatever the image uses (Vultr Debian images: ifupdown or
+  # netplan; VERIFY on first boot with `networkctl`). If the image already runs
+  # networkd these files simply join it.
+  - path: /etc/systemd/network/10-anycast.netdev
+    permissions: "0644"
+    content: |
+      [NetDev]
+      Name=dummy0
+      Kind=dummy
+  - path: /etc/systemd/network/10-anycast.network
+    permissions: "0644"
+    content: |
+      [Match]
+      Name=dummy0
+      [Network]
+      ${indent(6, anycast_network_addresses)}
+      [Link]
+      RequiredForOnline=no
+
+  - path: /etc/sysctl.d/60-forge.conf
+    permissions: "0644"
+    content: |
+      net.ipv4.ip_nonlocal_bind = 1
+      net.ipv6.ip_nonlocal_bind = 1
+      net.ipv4.ip_forward = 0
+      net.ipv6.conf.all.forwarding = 0
+      net.ipv6.conf.all.accept_ra = 2
+      net.ipv6.conf.default.accept_ra = 2
+      net.core.somaxconn = 1024
+      net.ipv4.tcp_syncookies = 1
+
+  # --- forge
+  - path: /etc/forge/forge.toml
+    permissions: "0640"
+    content: |
+      ${indent(6, forge_toml)}
+  - path: /etc/systemd/system/forge.service
+    permissions: "0644"
+    content: |
+      ${indent(6, forge_service)}
+  - path: /etc/systemd/system/forge-maintenance.service
+    permissions: "0644"
+    content: |
+      ${indent(6, forge_maintenance_service)}
+  - path: /etc/systemd/system/forge-maintenance.timer
+    permissions: "0644"
+    content: |
+      ${indent(6, forge_maintenance_timer)}
+  - path: /etc/systemd/system/forge-backup.service
+    permissions: "0644"
+    content: |
+      ${indent(6, forge_backup_service)}
+  - path: /etc/systemd/system/forge-backup.timer
+    permissions: "0644"
+    content: |
+      ${indent(6, forge_backup_timer)}
+  - path: /usr/local/bin/forge-backup
+    permissions: "0755"
+    content: |
+      ${indent(6, forge_backup_script)}
+
+  # --- Firewall (nftables package ships a default /etc/nftables.conf: defer).
+  - path: /etc/nftables.conf
+    permissions: "0755"
+    defer: true
+    content: |
+      ${indent(6, nftables_conf)}
+
+  # --- BIRD placeholder: starts with no sessions. scripts/deploy replaces
+  # bird.conf with infra/bird/generated/${node}/bird.conf; state.conf is the
+  # file the forge health worker and scripts/bgp-announce toggle.
+  - path: /etc/bird/bird.conf
+    permissions: "0640"
+    defer: true
+    content: |
+      # placeholder written by cloud-init; replaced by scripts/deploy
+      log syslog all;
+      protocol device { scan time 10; }
+      include "/etc/bird/state.conf";
+  - path: /etc/bird/state.conf
+    permissions: "0640"
+    defer: true
+    content: |
+      define ANNOUNCE = false;
+      define DRAIN = false;
+
+  - path: /etc/default/prometheus-node-exporter
+    permissions: "0644"
+    defer: true
+    content: |
+      ARGS="--web.listen-address=:9101 --collector.disable-defaults --collector.cpu --collector.meminfo --collector.filesystem --collector.netdev --collector.loadavg --collector.diskstats --collector.systemd"
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+  - path: /etc/forge/node.env
+    permissions: "0644"
+    content: |
+      # facts scripts/deploy and the node itself may consult
+      FORGE_NODE=${node}
+      FORGE_ROLE=${role}
+      FORGE_POP_INDEX=${pop_index}
+      FORGE_SERVICE_HOSTNAME=${service_hostname}
+
+runcmd:
+  # kernel + addresses
+  - [sysctl, --system]
+  - [systemctl, enable, --now, systemd-networkd]
+  - [networkctl, reload]
+  # forge user and directories (write_files ran before users existed)
+  - [install, -d, -m, "0750", -o, forge, -g, forge, /var/lib/forge, /var/lib/forge/tls, /var/lib/forge/ssh]
+  - [install, -d, -m, "0750", -o, root, -g, forge, /etc/forge, /etc/forge/secrets]
+  - [install, -d, -m, "0700", /var/backups/forge]
+  - [chgrp, forge, /etc/forge/forge.toml]
+  # node age identity: generated here, never leaves the machine. The public
+  # half is what `scripts/deploy init-node` collects into infra/secrets/nodes/.
+  - [sh, -c, "test -s /etc/forge/age.key || (umask 077 && age-keygen -o /etc/forge/age.key 2>/dev/null)"]
+  - [sh, -c, "age-keygen -y /etc/forge/age.key > /etc/forge/age.pub && chmod 0644 /etc/forge/age.pub"]
+  # OpenSSH to the admin port (handle socket-activated images too)
+  - [sh, -c, "systemctl is-enabled ssh.socket >/dev/null 2>&1 && systemctl disable --now ssh.socket || true"]
+  - [sh, -c, "sshd -t && systemctl restart ssh"]
+  # firewall: check then enable
+  - [sh, -c, "nft -c -f /etc/nftables.conf && systemctl enable --now nftables && nft -f /etc/nftables.conf"]
+  # units: forge waits for the binary (ConditionPathExists); wg0 for its config
+  - [chown, "root:bird", /etc/bird/bird.conf, /etc/bird/state.conf]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, forge.service, forge-maintenance.timer, forge-backup.timer, wg-quick@wg0.service]
+  - [systemctl, enable, --now, bird, prometheus-node-exporter, unattended-upgrades]
+  - [systemctl, start, forge-maintenance.timer, forge-backup.timer]
+  - [sh, -c, "echo \"forge node ${node} (${role}, ${hostname_fqdn}) bootstrapped; admin ssh :${admin_ssh_port}; age recipient $(cat /etc/forge/age.pub)\" | tee /dev/console"]
+
+final_message: "forge node ${node} ready after $UPTIME s (cloud-init $VERSION); next: scripts/deploy init-node ${node} && scripts/deploy ${node}"

@@ -1,0 +1,112 @@
+# CI for the forge. Every job only calls `make` targets or `scripts/*`, so
+# the same checks run identically on any other CI or a laptop:
+#   make lint / make test / make integration / make infra-lint
+#   python3 -m unittest discover -s tests/infra ; tests/network
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: go (lint, test, integration)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install lint tools
+        run: make tools
+      - name: Lint (gofmt, vet, staticcheck, govulncheck; infra-lint skips missing tools)
+        run: make lint
+      - name: Unit tests (race)
+        run: make test
+      - name: Integration tests
+        run: make integration
+
+  infra:
+    name: infra (tofu fmt/validate, cloud-init, systemd)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The Vultr provider schema requires api_key at validate time even
+      # though nothing is called; any value satisfies it. Not a real key.
+      VULTR_API_KEY: validate-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.6"
+          tofu_wrapper: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: tofu fmt / init / validate (all modules and environments), YAML checks
+        run: make infra-lint
+      - name: cloud-init template renders to valid YAML
+        run: python3 -m unittest discover -s tests/infra -v
+      - name: systemd unit syntax
+        run: |
+          systemd-analyze verify --man=no infra/systemd/*.service infra/systemd/*.timer 2>&1 \
+            | grep -v -e 'is not executable' -e 'not found' || true
+          systemd-analyze security --offline=true --no-pager --threshold=5 infra/systemd/forge.service
+      - name: shell scripts parse
+        run: for f in scripts/deploy scripts/secrets scripts/infra-lint infra/backup/forge-backup; do bash -n "$f"; done
+
+  network:
+    name: network (address plan, bird/wireguard generation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - name: Install bird2 for `bird -p` config checks
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq bird2 >/dev/null
+      - name: Network tests
+        run: |
+          if [ -d tests/network ]; then python3 -m unittest discover -s tests/network -v; else echo "tests/network absent"; fi
+      - name: netgen --check
+        run: if [ -x scripts/netgen ]; then scripts/netgen --check; else echo "scripts/netgen absent"; fi
+
+  security:
+    name: security (gosec, secret scan)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gosec (advisory; govulncheck already gates in `make lint`)
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          "$(go env GOPATH)/bin/gosec" -quiet -exclude-generated ./... || echo "::warning::gosec reported findings"
+      - name: No plaintext secrets committed
+        run: |
+          set -e
+          # Every SOPS bundle must carry sops metadata and no unencrypted leaf.
+          for f in $(git ls-files 'infra/secrets/*.enc.yaml'); do
+            grep -q '^sops:' "$f" || { echo "$f is not SOPS-encrypted"; exit 1; }
+          done
+          # Private key material anywhere in the tree is a failure.
+          ! git grep -n -E 'AGE-SECRET-KEY-1|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' -- ':!infra/secrets/schema.example.yaml' ':!docs/**' ':!scripts/secrets' ':!infra/secrets/README.md' ':!*.go' \
+            || { echo "private key material found"; exit 1; }

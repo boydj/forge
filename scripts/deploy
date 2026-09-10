@@ -1,0 +1,314 @@
+#!/usr/bin/env bash
+# scripts/deploy: push the forge binary, generated configs and secrets to a
+# node over SSH, restart, smoke-test. Works against a node booted by
+# infra/cloud-init/node.yaml.tftpl (Vultr via OpenTofu) or against any Debian
+# 13 box prepared with `deploy bootstrap` (docs/self-hosting.md).
+#
+#   deploy <pop> [--binary bin/forge] [--host user@host] [--config-dir DIR] [--no-secrets] [--dry-run]
+#   deploy init-node <pop> [--host user@host]     collect the node's age recipient into infra/secrets/nodes/<pop>.age.pub
+#   deploy bootstrap <pop> --host root@host       prepare a hand-installed box (users, packages, sshd :2200, dirs, age key)
+#   deploy rollback <pop>                         swap /usr/local/bin/forge.prev back and restart
+#   deploy drain <pop> | undrain <pop>            withdraw/announce via scripts/bgp-announce on the node
+#   deploy smoke <pop>                            Gemini + SSH banner checks only
+#
+# Environment: FORGE_ENV (dev), FORGE_ZONE (as215520.net), FORGE_ADMIN_PORT
+# (2200), FORGE_DEPLOY_USER (deploy). Secrets come from
+# infra/secrets/$FORGE_ENV.enc.yaml via scripts/secrets; nodes only ever get
+# their own subset, re-encrypted to their own age key.
+set -euo pipefail
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ENV_NAME=${FORGE_ENV:-dev}
+ZONE=${FORGE_ZONE:-as215520.net}
+PORT=${FORGE_ADMIN_PORT:-2200}
+USER_=${FORGE_DEPLOY_USER:-deploy}
+BUNDLE="$ROOT/infra/secrets/$ENV_NAME.enc.yaml"
+TOFU_DIR="$ROOT/infra/opentofu/environments/$ENV_NAME"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new)
+DRY=0; BINARY=""; HOST=""; CONFIG_DIR=""; WITH_SECRETS=1
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+
+log() { printf '\033[1mdeploy:\033[0m %s\n' "$*" >&2; }
+die() { echo "deploy: $*" >&2; exit 1; }
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+parse_opts() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --binary) BINARY=$2; shift 2;;
+      --host) HOST=$2; shift 2;;
+      --config-dir) CONFIG_DIR=$2; shift 2;;
+      --no-secrets) WITH_SECRETS=0; shift;;
+      --dry-run|-n) DRY=1; shift;;
+      -h|--help) usage 0;;
+      *) die "unknown option $1";;
+    esac
+  done
+}
+
+target() { # $1 pop -> user@host
+  if [ -n "$HOST" ]; then echo "$HOST"; else echo "$USER_@$1.nodes.$ZONE"; fi
+}
+host_only() { echo "${1#*@}"; }
+
+# All remote actions go through these two so --dry-run can show the plan.
+rsh() { # rsh <user@host> <command...>
+  local t=$1; shift
+  if [ "$DRY" = 1 ]; then echo "  ssh $t: $*" >&2; return 0; fi
+  ssh "${SSH_OPTS[@]}" -p "$PORT" "$t" "$@"
+}
+rcp() { # rcp <local> <user@host> <remote path>
+  if [ "$DRY" = 1 ]; then echo "  scp $1 -> $2:$3" >&2; return 0; fi
+  scp "${SSH_OPTS[@]}" -q -P "$PORT" "$1" "$2:$3"
+}
+rsudo() { local t=$1; shift; rsh "$t" sudo -n "$@"; }
+rscript() { # rscript <user@host> [args...] <<'EOT' ... EOT  : run a root shell script from stdin (no quoting games)
+  local t=$1; shift
+  if [ "$DRY" = 1 ]; then echo "  ssh $t: sudo -n sh -s -- $* <<EOT" >&2; sed 's/^/    /' >&2; echo "  EOT" >&2; return 0; fi
+  ssh "${SSH_OPTS[@]}" -p "$PORT" "$t" sudo -n sh -s -- "$@"
+}
+
+build_binary() {
+  local out=$1
+  log "building linux/amd64 static binary"
+  if [ "$DRY" = 1 ]; then echo "  GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o $out ./cmd/forge" >&2; return 0; fi
+  local version; version=$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)
+  (cd "$ROOT" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    go build -trimpath -ldflags "-s -w -X as215520.net/forge/internal/version.Version=$version" -o "$out" ./cmd/forge)
+}
+
+push_binary() { # push_binary <target> <binary>
+  local t=$1 bin=$2
+  log "installing binary atomically (previous kept as forge.prev)"
+  rcp "$bin" "$t" "forge.new"
+  rsudo "$t" sh -c "'install -m755 -o root -g root forge.new /usr/local/bin/forge.new && rm -f forge.new \
+    && { [ -e /usr/local/bin/forge ] && cp -p /usr/local/bin/forge /usr/local/bin/forge.prev || true; } \
+    && mv /usr/local/bin/forge.new /usr/local/bin/forge'"
+}
+
+push_file() { # push_file <target> <local> <remote> <mode> <owner>
+  local t=$1 src=$2 dst=$3 mode=$4 owner=$5
+  [ -f "$src" ] || return 0
+  log "pushing $(basename "$src") -> $dst"
+  rcp "$src" "$t" "deploy.tmp"
+  rsudo "$t" sh -c "'install -D -m $mode -o ${owner%%:*} -g ${owner##*:} deploy.tmp $dst && rm -f deploy.tmp'"
+}
+
+push_units() {
+  local t=$1
+  for u in forge.service forge-maintenance.service forge-maintenance.timer forge-backup.service forge-backup.timer; do
+    push_file "$t" "$ROOT/infra/systemd/$u" "/etc/systemd/system/$u" 0644 root:root
+  done
+  push_file "$t" "$ROOT/infra/backup/forge-backup" /usr/local/bin/forge-backup 0755 root:root
+  push_file "$t" "$ROOT/scripts/bgp-announce" /usr/local/bin/bgp-announce 0755 root:root
+  rsudo "$t" systemctl daemon-reload
+}
+
+render_configs() { # render_configs <pop> <dir>: forge.toml + nftables.conf from tofu outputs or --config-dir
+  local pop=$1 dir=$2
+  if [ -n "$CONFIG_DIR" ]; then cp "$CONFIG_DIR"/forge.toml "$CONFIG_DIR"/nftables.conf "$dir"/ 2>/dev/null || true; return 0; fi
+  if command -v tofu >/dev/null 2>&1 && [ -d "$TOFU_DIR" ] && [ -e "$TOFU_DIR/terraform.tfstate" ]; then
+    tofu -chdir="$TOFU_DIR" output -raw forge_toml > "$dir/forge.toml" 2>/dev/null || rm -f "$dir/forge.toml"
+    tofu -chdir="$TOFU_DIR" output -raw nftables_conf > "$dir/nftables.conf" 2>/dev/null || rm -f "$dir/nftables.conf"
+  fi
+  [ -s "$dir/forge.toml" ] || log "no rendered forge.toml (no tofu state / --config-dir); keeping the node's current one"
+}
+
+push_configs() { # push_configs <target> <pop> <dir>
+  local t=$1 pop=$2 dir=$3
+  push_file "$t" "$dir/forge.toml" /etc/forge/forge.toml 0640 root:forge
+  push_file "$t" "$dir/nftables.conf" /etc/nftables.conf 0755 root:root
+  # Generated by the network agent's scripts/netgen (referenced, not created here).
+  push_file "$t" "$ROOT/infra/bird/generated/$pop/bird.conf" /etc/bird/bird.conf 0640 root:bird
+  # state.conf holds live announce/drain state (bgp-announce rewrites it): only
+  # seed it when the node has none or still has the cloud-init placeholder.
+  if [ -f "$ROOT/infra/bird/generated/$pop/state.conf" ]; then
+    if [ "$DRY" = 1 ] || ! rsh "$t" grep -q DRAIN /etc/bird/state.conf 2>/dev/null; then
+      push_file "$t" "$ROOT/infra/bird/generated/$pop/state.conf" /etc/bird/state.conf 0640 root:bird
+    fi
+  fi
+  push_file "$t" "$ROOT/infra/wireguard/generated/$pop/wg0.conf" /etc/wireguard/wg0.conf 0600 root:root
+}
+
+# Secrets: extract this node's subset from the SOPS bundle, tar it, encrypt to
+# the node's age recipient, ship, decrypt on the node with /etc/forge/age.key.
+push_secrets() { # push_secrets <target> <pop>
+  local t=$1 pop=$2 recip_file="$ROOT/infra/secrets/nodes/$pop.age.pub"
+  [ -s "$BUNDLE" ] || { log "no bundle $BUNDLE; skipping secrets"; return 0; }
+  [ -s "$recip_file" ] || die "no node recipient at $recip_file; run: deploy init-node $pop"
+  local recip; recip=$(tr -d '[:space:]' < "$recip_file")
+  local tmp="$TMP/secrets-$pop"; rm -rf "$tmp"
+  local s="$ROOT/scripts/secrets" d="$tmp/secrets"
+  install -d -m 0700 "$d/tls" "$d/ssh"
+  log "extracting secrets for $pop from $BUNDLE"
+  if [ "$DRY" = 1 ]; then echo "  (sops -d --extract x8, age -r $recip, ssh age -d -i /etc/forge/age.key | tar -x -C /etc/forge/secrets)" >&2; return 0; fi
+  get() { "$s" get "$BUNDLE" "$1" 2>/dev/null || true; }
+  get forge_tls_key   > "$d/tls/server.key"
+  get forge_tls_cert  > "$d/tls/server.crt"
+  get ssh_host_key    > "$d/ssh/host_ed25519"
+  get cluster_secret  > "$d/cluster.secret"
+  get "wireguard_private_keys.$pop" > "$d/wg.key"
+  get vultr_bgp_password > "$d/bgp.password"
+  bk=$(get backup_encryption_key)
+  if [ -n "$bk" ] && [ "${bk#AGE-SECRET-KEY-}" != "$bk" ]; then
+    printf '%s\n' "$bk" | age-keygen -y > "$d/backup.recipient" 2>/dev/null || true
+  fi
+  for f in "$d"/tls/* "$d"/ssh/* "$d"/*; do [ -f "$f" ] && [ ! -s "$f" ] && rm -f "$f"; done
+  grep -rl '^REPLACE' "$d" 2>/dev/null | while read -r f; do log "WARNING: placeholder value in ${f#$d/}"; rm -f "$f"; done
+  chmod -R go-rwx "$d"
+  tar -C "$d" -cf - . | age -r "$recip" -o "$tmp/secrets.tar.age"
+  rcp "$tmp/secrets.tar.age" "$t" "secrets.tar.age"
+  rscript "$t" <<'EOT'
+set -e; umask 077
+install -d -m 0750 -o root -g forge /etc/forge/secrets /etc/forge/secrets/tls /etc/forge/secrets/ssh
+age -d -i /etc/forge/age.key secrets.tar.age | tar -x -C /etc/forge/secrets
+rm -f secrets.tar.age
+chown -R root:forge /etc/forge/secrets
+chmod 0750 /etc/forge/secrets /etc/forge/secrets/tls /etc/forge/secrets/ssh
+find /etc/forge/secrets -type f -exec chmod 0640 {} +
+for f in wg.key bgp.password; do [ -f /etc/forge/secrets/$f ] && chmod 0600 /etc/forge/secrets/$f; done; true
+EOT
+  fill_placeholders "$t"
+}
+
+# Fill the placeholders scripts/netgen leaves in the generated configs:
+# __WG_PRIVATE_KEY__ / __BGP_MD5__ from the shipped secrets, and
+# __PROVIDER_IPV4__ / __PROVIDER_IPV6__ (only if netgen --overrides did not
+# already fill them) from the node's own default-route source addresses.
+# perl-base is Essential on Debian; values travel in env vars so any byte is safe.
+fill_placeholders() {
+  rscript "$1" <<'EOT'
+set -e
+sub() { # sub <file> <placeholder> <value>
+  [ -f "$1" ] && grep -q "$2" "$1" || return 0
+  V="$3" P="$2" perl -pi -e 's/\Q$ENV{P}\E/$ENV{V}/g' "$1"
+}
+[ -f /etc/forge/secrets/wg.key ] && sub /etc/wireguard/wg0.conf __WG_PRIVATE_KEY__ "$(cat /etc/forge/secrets/wg.key)"
+[ -f /etc/forge/secrets/bgp.password ] && sub /etc/bird/bird.conf __BGP_MD5__ "$(cat /etc/forge/secrets/bgp.password)"
+V4=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)
+V6=$(ip -6 route get 2001:4860:4860::8888 2>/dev/null | sed -n 's/.*src \([0-9a-f:]*\).*/\1/p' | head -1)
+[ -n "$V4" ] && sub /etc/bird/bird.conf __PROVIDER_IPV4__ "$V4"
+[ -n "$V6" ] && sub /etc/bird/bird.conf __PROVIDER_IPV6__ "$V6"
+true
+EOT
+}
+
+restart_services() {
+  log "applying firewall, wireguard, bird; restarting forge"
+  rscript "$1" <<'EOT'
+set -e
+nft -c -f /etc/nftables.conf && systemctl reload-or-restart nftables
+if [ -s /etc/wireguard/wg0.conf ] && ! grep -q '__[A-Z0-9_]*__' /etc/wireguard/wg0.conf; then systemctl restart wg-quick@wg0; fi
+if [ -s /etc/bird/bird.conf ] && ! grep -q '__[A-Z0-9_]*__' /etc/bird/bird.conf; then
+  bird -p -c /etc/bird/bird.conf && { birdc configure >/dev/null || systemctl restart bird; }
+fi
+systemctl restart forge; sleep 2
+systemctl is-active forge >/dev/null || { journalctl -u forge -n 30 --no-pager; exit 1; }
+EOT
+}
+
+smoke() { # smoke <pop> — against the node's own unicast name (not the anycast name)
+  local pop=$1 h; h=$(host_only "$(target "$pop")")
+  log "smoke test against $h"
+  [ "$DRY" = 1 ] && { echo "  gemini://$h/status ; ssh banner on $h:22" >&2; return 0; }
+  local ok=1
+  if command -v openssl >/dev/null 2>&1; then
+    local conn="$h:1965"; case "$h" in *:*) conn="[$h]:1965";; esac # bracket IPv6 literals only
+    local resp; resp=$(printf 'gemini://git.%s/status\r\n' "$ZONE" | timeout 10 openssl s_client -quiet -connect "$conn" -servername "git.$ZONE" 2>/dev/null | head -1 || true)
+    case "$resp" in 2*|3*) log "gemini: $resp";; *) log "gemini FAILED: '${resp:-no response}'"; ok=0;; esac
+  fi
+  local banner; banner=$(timeout 5 bash -c "exec 3<>/dev/tcp/$h/22; head -c 64 <&3" 2>/dev/null | tr -d '\r' | head -1 || true)
+  case "$banner" in SSH-2.0*) log "ssh: $banner";; *) log "ssh FAILED: '${banner:-no banner}'"; ok=0;; esac
+  [ "$ok" = 1 ] || die "smoke test failed on $pop"
+}
+
+cmd_deploy() {
+  local pop=$1; shift; parse_opts "$@"
+  local t; t=$(target "$pop")
+  local tmp="$TMP/deploy-$pop"; mkdir -p "$tmp"
+  [ "$DRY" = 1 ] && log "DRY RUN for $pop ($t)"
+  local bin=$BINARY
+  if [ -z "$bin" ]; then bin="$tmp/forge"; build_binary "$bin"; fi
+  [ "$DRY" = 1 ] || [ -x "$bin" ] || die "binary $bin not found"
+  push_binary "$t" "$bin"
+  push_units "$t"
+  render_configs "$pop" "$tmp"
+  push_configs "$t" "$pop" "$tmp"
+  [ "$WITH_SECRETS" = 1 ] && push_secrets "$t" "$pop"
+  restart_services "$t"
+  smoke "$pop"
+  log "deployed $pop"
+}
+
+cmd_init_node() {
+  local pop=$1; shift; parse_opts "$@"
+  local t out; t=$(target "$pop"); out="$ROOT/infra/secrets/nodes/$pop.age.pub"
+  log "collecting age recipient from $t"
+  local recip
+  recip=$(rsudo "$t" sh -c "'command -v age-keygen >/dev/null || apt-get install -qq -y age >/dev/null; \
+    test -s /etc/forge/age.key || (umask 077 && age-keygen -o /etc/forge/age.key 2>/dev/null); \
+    age-keygen -y /etc/forge/age.key | tee /etc/forge/age.pub'")
+  [ "$DRY" = 1 ] && return 0
+  case "$recip" in age1*) ;; *) die "unexpected recipient '$recip'";; esac
+  install -d "$(dirname "$out")"; printf '%s\n' "$recip" > "$out"
+  log "wrote $out"
+  echo "$recip"
+  echo "add to .sops.yaml only if this node should decrypt whole bundles (not needed for deploy)." >&2
+}
+
+cmd_bootstrap() { # minimal equivalent of the cloud-init for a hand-installed Debian 13 box
+  local pop=$1; shift; parse_opts "$@"
+  [ -n "$HOST" ] || die "bootstrap needs --host root@host (port $PORT or set FORGE_ADMIN_PORT=22 for the first run)"
+  local t=$HOST
+  log "bootstrapping $pop on $t (packages, users, sshd :2200, dirs, age key)"
+  local keys=""; [ -r "$HOME/.ssh/id_ed25519.pub" ] && keys=$(cat "$HOME/.ssh/id_ed25519.pub")
+  rsh "$t" sudo -n sh -s -- "$pop" "$keys" <<'EOT'
+set -e; pop=$1; key=$2
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq && apt-get install -qq -y git bird2 wireguard-tools nftables curl ca-certificates age zstd unattended-upgrades prometheus-node-exporter >/dev/null
+id forge >/dev/null 2>&1 || useradd --system --home-dir /var/lib/forge --create-home --shell /usr/sbin/nologin forge
+id deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/bash --groups forge deploy
+echo 'deploy ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/deploy; chmod 0440 /etc/sudoers.d/deploy
+if [ -n "$key" ]; then install -d -m 0700 -o deploy -g deploy /home/deploy/.ssh; grep -qxF "$key" /home/deploy/.ssh/authorized_keys 2>/dev/null || echo "$key" >> /home/deploy/.ssh/authorized_keys; chown deploy:deploy /home/deploy/.ssh/authorized_keys; chmod 0600 /home/deploy/.ssh/authorized_keys; fi
+install -d -m 0750 -o forge -g forge /var/lib/forge; install -d -m 0750 -o root -g forge /etc/forge /etc/forge/secrets; install -d -m 0700 /var/backups/forge
+printf 'Port 2200\nPasswordAuthentication no\nKbdInteractiveAuthentication no\nPermitRootLogin prohibit-password\nAllowUsers root deploy\n' > /etc/ssh/sshd_config.d/10-forge.conf
+systemctl is-enabled ssh.socket >/dev/null 2>&1 && systemctl disable --now ssh.socket || true
+sshd -t && systemctl restart ssh
+test -s /etc/forge/age.key || (umask 077 && age-keygen -o /etc/forge/age.key 2>/dev/null); age-keygen -y /etc/forge/age.key > /etc/forge/age.pub
+printf 'FORGE_NODE=%s\n' "$pop" > /etc/forge/node.env
+echo "bootstrapped $pop; sshd now on 2200; age recipient $(cat /etc/forge/age.pub)"
+EOT
+  log "next: FORGE_ADMIN_PORT=2200 scripts/deploy init-node $pop --host deploy@$(host_only "$t"); then deploy $pop --config-dir <dir with forge.toml + nftables.conf>"
+}
+
+cmd_rollback() {
+  local pop=$1; shift; parse_opts "$@"
+  local t; t=$(target "$pop")
+  log "rolling back binary on $pop"
+  rsudo "$t" sh -c "'set -e; [ -x /usr/local/bin/forge.prev ] || { echo no forge.prev; exit 1; }; \
+    mv /usr/local/bin/forge /usr/local/bin/forge.failed; mv /usr/local/bin/forge.prev /usr/local/bin/forge; systemctl restart forge'"
+  smoke "$pop"
+}
+
+cmd_announce() { # drain|undrain
+  local action=$1 pop=$2; shift 2; parse_opts "$@"
+  local t verb; t=$(target "$pop")
+  case "$action" in drain) verb=withdraw;; undrain) verb=announce;; esac
+  log "$action $pop via /usr/local/bin/bgp-announce $verb (scripts/bgp-announce)"
+  rsudo "$t" sh -c "'command -v bgp-announce >/dev/null || { echo bgp-announce not installed on node; exit 1; }; bgp-announce $verb'"
+}
+
+main() {
+  [ $# -ge 1 ] || usage 1
+  case "$1" in
+    -h|--help|help) usage 0;;
+    init-node) shift; [ $# -ge 1 ] || usage 1; cmd_init_node "$@";;
+    bootstrap) shift; [ $# -ge 1 ] || usage 1; cmd_bootstrap "$@";;
+    rollback) shift; [ $# -ge 1 ] || usage 1; cmd_rollback "$@";;
+    drain|undrain) a=$1; shift; [ $# -ge 1 ] || usage 1; cmd_announce "$a" "$@";;
+    smoke) shift; [ $# -ge 1 ] || usage 1; pop=$1; shift; parse_opts "$@"; smoke "$pop";;
+    -*) usage 1;;
+    *) cmd_deploy "$@";;
+  esac
+}
+main "$@"

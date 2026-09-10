@@ -120,6 +120,9 @@ func (h *harness) url(path string) string {
 
 func (h *harness) titan(path string, mime string, body string) string {
 	_, port, _ := net.SplitHostPort(h.addr)
+	if mime == "" {
+		return fmt.Sprintf("titan://localhost:%s%s", port, path)
+	}
 	return fmt.Sprintf("titan://localhost:%s%s;size=%d;mime=%s", port, path, len(body), mime)
 }
 
@@ -247,7 +250,7 @@ func TestRegistrationAndKeys(t *testing.T) {
 		t.Fatalf("dup name: %d %s", status, meta)
 	}
 	// Create a repository through INPUT.
-	status, meta, _ = h.get(h.url("/new"), &cert, "")
+	status, _, _ = h.get(h.url("/new"), &cert, "")
 	if status != 10 {
 		t.Fatalf("new prompt: %d", status)
 	}
@@ -338,4 +341,112 @@ func TestMarkdown(t *testing.T) {
 	if got != want {
 		t.Errorf("got:\n%q\nwant:\n%q", got, want)
 	}
+}
+
+func TestIssuesOverTitan(t *testing.T) {
+	h := newHarness(t)
+	h.seedRepo("alice", "proj")
+	alice := clientCert(t, "alice")
+	bob := clientCert(t, "bob")
+	// Register alice against the seeded account: seedRepo created the user
+	// row without a certificate, so bind one directly.
+	ctx := context.Background()
+	au, _ := h.f.Store.UserByName(ctx, "alice")
+	id, _ := h.f.Authenticate(ctx, mustX509(t, alice))
+	if _, err := h.f.AddCertificate(ctx, au, id, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _ = h.get(h.url("/account?bob"), &bob, ""); false {
+		t.Fatal()
+	}
+
+	status, _, body := h.get(h.url("/~alice/proj/issues/"), nil, "")
+	if status != 20 || !strings.Contains(body, "Open issues (0)") {
+		t.Fatalf("empty issue list: %d %s", status, body)
+	}
+	text := "Crash on start\n\nSteps:\n* run it\n=> gemini://example.org/ see also\n# not a page heading\n"
+	status, meta, _ := h.get(h.titan("/~alice/proj/issues/new", "text/plain", text), &bob, text)
+	if status != 30 || meta != "/~alice/proj/issues/1" {
+		t.Fatalf("open issue: %d %s", status, meta)
+	}
+	status, _, body = h.get(h.url("/~alice/proj/issues/1"), nil, "")
+	if status != 20 || !strings.Contains(body, "# #1 Crash on start") || !strings.Contains(body, "open issue opened by bob") ||
+		!strings.Contains(body, "=> gemini://example.org/ see also [user link]") || !strings.Contains(body, "### not a page heading") {
+		t.Fatalf("issue page: %d\n%s", status, body)
+	}
+	// Anonymous Titan is refused with 60 before the body is read.
+	status, _, _ = h.get(h.titan("/~alice/proj/issues/1/comment", "text/plain", "hi"), nil, "hi")
+	if status != 60 {
+		t.Errorf("anon comment: %d", status)
+	}
+	c := "Confirmed, thanks."
+	status, meta, _ = h.get(h.titan("/~alice/proj/issues/1/comment", "text/gemini", c), &alice, c)
+	if status != 30 {
+		t.Fatalf("comment: %d %s", status, meta)
+	}
+	status, _, body = h.get(h.url("/~alice/proj/issues/1"), &alice, "")
+	if !strings.Contains(body, "## alice, ") || !strings.Contains(body, "Confirmed, thanks.") || !strings.Contains(body, "close this issue") {
+		t.Fatalf("issue with comment:\n%s", body)
+	}
+	// Bob (author) may close via INPUT confirmation; a bare request only prompts.
+	status, meta, _ = h.get(h.url("/~alice/proj/issues/1/close"), &bob, "")
+	if status != 10 {
+		t.Fatalf("close prompt: %d %s", status, meta)
+	}
+	status, _, _ = h.get(h.url("/~alice/proj/issues/1/close?nope"), &bob, "")
+	if status != 10 {
+		t.Fatalf("close unconfirmed: %d", status)
+	}
+	status, meta, _ = h.get(h.url("/~alice/proj/issues/1/close?close%20fixed%20in%20main"), &bob, "")
+	if status != 30 {
+		t.Fatalf("close: %d %s", status, meta)
+	}
+	status, _, body = h.get(h.url("/~alice/proj/issues/1"), nil, "")
+	if !strings.Contains(body, "closed issue opened by bob") || !strings.Contains(body, "fixed in main") {
+		t.Fatalf("closed issue:\n%s", body)
+	}
+	status, _, body = h.get(h.url("/~alice/proj/issues/?closed"), nil, "")
+	if !strings.Contains(body, "#1 Crash on start (bob") || !strings.Contains(body, "2 comments") {
+		t.Fatalf("closed list:\n%s", body)
+	}
+	// A stranger cannot close or edit.
+	stranger := clientCert(t, "carol")
+	_, _, _ = h.get(h.url("/account?carol"), &stranger, "")
+	status, _, _ = h.get(h.url("/~alice/proj/issues/1/reopen?reopen"), &stranger, "")
+	if status != 61 {
+		t.Errorf("stranger reopen: %d", status)
+	}
+	// ;edit returns the raw text; edit replaces title/body.
+	status, meta, body = h.get(h.titan("/~alice/proj/issues/1/edit", "", "")+";edit", &bob, "")
+	if status != 20 || !strings.HasPrefix(meta, "text/plain") || !strings.HasPrefix(body, "Crash on start\n") {
+		t.Fatalf("edit raw: %d %s %q", status, meta, body)
+	}
+	e := "Crash on startup\n\nedited body"
+	status, meta, _ = h.get(h.titan("/~alice/proj/issues/1/edit", "text/plain", e), &bob, e)
+	if status != 30 {
+		t.Fatalf("edit: %d %s", status, meta)
+	}
+	status, _, body = h.get(h.url("/~alice/proj/issues/1"), nil, "")
+	if !strings.Contains(body, "# #1 Crash on startup") || !strings.Contains(body, "edited body") {
+		t.Fatalf("after edit:\n%s", body)
+	}
+	status, _, body = h.get(h.url("/~alice/proj/issues/feed"), nil, "")
+	if status != 20 || !strings.Contains(body, "bob opened issue #1") || !strings.Contains(body, "alice commented on issue #1") || !strings.Contains(body, "bob closed issue #1") {
+		t.Fatalf("issue feed:\n%s", body)
+	}
+	// Oversized body is refused before reading.
+	big := strings.Repeat("x", int(h.f.Config.Limits.MaxTextBytes)+1)
+	status, _, _ = h.get(h.titan("/~alice/proj/issues/1/comment", "text/plain", big), &alice, big)
+	if status != 50 {
+		t.Errorf("oversized comment: %d", status)
+	}
+}
+
+func mustX509(t *testing.T, c tls.Certificate) *x509.Certificate {
+	t.Helper()
+	x, err := x509.ParseCertificate(c.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return x
 }

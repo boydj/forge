@@ -27,7 +27,7 @@ REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.par
 NETGEN = os.path.join(REPO, "scripts", "netgen")
 PLAN = os.path.join(REPO, "infra", "network", "address-plan.yaml")
 OVERRIDES = os.path.join(REPO, "infra", "network", "overrides.example.yaml")
-BGP_ANNOUNCE = os.path.join(REPO, "infra", "bird", "bgp-announce")
+BGP_ANNOUNCE = os.path.join(REPO, "scripts", "bgp-announce")
 FORBIDDEN = re.compile(r"20473:6000\b|\(\s*20473\s*,\s*6000\s*\)")
 
 

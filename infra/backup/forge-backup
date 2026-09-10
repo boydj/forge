@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# forge-backup: consistent backup of a forge node's data directory.
+#
+# Interface (the CLI does not exist yet; this script is written against it):
+#   forge admin backup --config /etc/forge/forge.toml --out <file.tar.zst>
+#     writes a zstd-compressed tar containing a consistent SQLite snapshot
+#     (VACUUM INTO / backup API), all bare repositories (with refs taken after
+#     the database snapshot so the DB never references missing objects),
+#     release assets and the TLS/SSH identities. Exit 0 on success.
+#
+# Output: /var/backups/forge/<UTC date-time>.tar.zst.age, encrypted with the
+# backup_encryption_key recipient from /etc/forge/secrets/backup.recipient
+# (an age public key; the private half stays with the operator, never on the
+# node). Retention: keep the newest $KEEP files. Off-site copy: set
+# OFFSITE_CMD (e.g. "rclone copy") in /etc/default/forge-backup.
+set -euo pipefail
+
+CONFIG=${CONFIG:-/etc/forge/forge.toml}
+OUT_DIR=${OUT_DIR:-/var/backups/forge}
+RECIPIENT_FILE=${RECIPIENT_FILE:-/etc/forge/secrets/backup.recipient}
+KEEP=${KEEP:-7}
+OFFSITE_CMD=${OFFSITE_CMD:-}
+[ -r /etc/default/forge-backup ] && . /etc/default/forge-backup
+
+log() { printf 'forge-backup: %s\n' "$*" >&2; }
+die() { log "$*"; exit 1; }
+
+command -v forge >/dev/null || die "forge not in PATH"
+command -v age >/dev/null || die "age not installed"
+[ -r "$RECIPIENT_FILE" ] || die "no backup recipient at $RECIPIENT_FILE (scripts/deploy pushes it)"
+recipient=$(tr -d '[:space:]' < "$RECIPIENT_FILE")
+case "$recipient" in age1*) ;; *) die "recipient in $RECIPIENT_FILE is not an age public key";; esac
+
+install -d -m 0700 "$OUT_DIR"
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+tmp=$(mktemp -d "$OUT_DIR/.tmp.XXXXXX"); trap 'rm -rf "$tmp"' EXIT
+plain="$tmp/$stamp.tar.zst"
+final="$OUT_DIR/$stamp.tar.zst.age"
+
+log "creating $plain"
+# Run the export as the forge user so the data directory permissions stay intact.
+if [ "$(id -u)" = 0 ]; then
+  runuser -u forge -- forge admin backup --config "$CONFIG" --out "$plain"
+else
+  forge admin backup --config "$CONFIG" --out "$plain"
+fi
+[ -s "$plain" ] || die "backup produced an empty file"
+
+age -r "$recipient" -o "$final.part" "$plain"
+mv "$final.part" "$final"
+chmod 0600 "$final"
+log "wrote $final ($(du -h "$final" | cut -f1))"
+
+# Retention: newest $KEEP encrypted archives.
+ls -1t "$OUT_DIR"/*.tar.zst.age 2>/dev/null | tail -n +"$((KEEP + 1))" | while read -r old; do
+  log "pruning $old"; rm -f -- "$old"
+done
+
+if [ -n "$OFFSITE_CMD" ]; then
+  log "off-site: $OFFSITE_CMD $final"
+  # shellcheck disable=SC2086
+  $OFFSITE_CMD "$final"
+fi

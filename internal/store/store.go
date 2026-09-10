@@ -126,8 +126,6 @@ func ParseTime(s string) time.Time {
 	return t
 }
 
-func nullStr(s sql.NullString) string { return s.String }
-
 func nullTime(s sql.NullString) time.Time {
 	if !s.Valid {
 		return time.Time{}

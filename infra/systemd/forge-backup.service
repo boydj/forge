@@ -1,0 +1,31 @@
+# Daily backup: /usr/local/bin/forge-backup (infra/backup/forge-backup) calls
+# `forge admin backup` and writes an age-encrypted tar.zst under
+# /var/backups/forge, then prunes old ones. Off-site copy is a TODO in the
+# script (rclone to object storage, see docs/costs.md).
+[Unit]
+Description=forge backup
+After=forge.service
+ConditionPathExists=/etc/forge/forge.toml
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/forge-backup
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=400M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/forge
+ReadWritePaths=/var/backups/forge
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native

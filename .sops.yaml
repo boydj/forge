@@ -1,0 +1,28 @@
+# SOPS configuration (docs/decisions/0007-secrets-sops-age.md, docs/secrets.md).
+#
+# Recipients are age public keys. Replace the placeholders with real ones:
+#   operator: `scripts/secrets init` prints yours (~/.config/forge/age.key)
+#   nodes:    `scripts/deploy init-node <pop>` stores each node's recipient in
+#             infra/secrets/nodes/<pop>.age.pub. Nodes are NOT recipients of
+#             the environment files by default: scripts/deploy extracts only a
+#             node's own subset and re-encrypts it to that node's key. Add a
+#             node here only if you want it to decrypt the whole file itself.
+#
+# After changing recipients: `sops updatekeys infra/secrets/<env>.enc.yaml`.
+creation_rules:
+  # Per-environment secret bundles (schema: infra/secrets/README.md).
+  - path_regex: infra/secrets/(dev|staging|production)\.enc\.yaml$
+    # Everything except schema_version is encrypted. (Go regexp: no lookahead,
+    # so use unencrypted_regex rather than a negative encrypted_regex.)
+    unencrypted_regex: "^schema_version$"
+    key_groups:
+      - age:
+          - age1operatorplaceholder000000000000000000000000000000000000000000  # operator (replace)
+          # - age1secondoperator...                                            # second operator / CI
+          # - age1node_ewr1...   # infra/secrets/nodes/ewr1.age.pub (optional, see above)
+
+  # Anything else under infra/secrets/*.enc.yaml: operator only.
+  - path_regex: infra/secrets/.*\.enc\.yaml$
+    key_groups:
+      - age:
+          - age1operatorplaceholder000000000000000000000000000000000000000000  # operator (replace)

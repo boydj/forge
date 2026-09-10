@@ -90,8 +90,8 @@ func SSHFPRecords(pub ssh.PublicKey) []string {
 	switch t := pub.Type(); {
 	case t == ssh.KeyAlgoRSA:
 		alg = 1
-	case t == ssh.InsecureKeyAlgoDSA:
-		alg = 2
+	case t == "ssh-dss":
+		alg = 2 // DSA is never generated here; listed for completeness
 	case strings.HasPrefix(t, "ecdsa-sha2-"):
 		alg = 3
 	case t == ssh.KeyAlgoED25519:

@@ -144,7 +144,7 @@ define ANNOUNCE = false;   # false: export nothing
 define DRAIN = false;      # true: export with prepend + drain communities
 ```
 
-`infra/bird/bgp-announce status|announce|withdraw|drain|undrain` rewrites the
+`scripts/bgp-announce status|announce|withdraw|drain|undrain` rewrites the
 file atomically (temp + rename), runs `birdc configure check`, then
 `birdc configure`, and rolls the file back if either fails. It is idempotent
 (no reload when nothing changes) so the health worker may call it every tick.

@@ -1,0 +1,34 @@
+# Nightly housekeeping: git gc/fsck of repositories, SQLite VACUUM/ANALYZE,
+# expired session and temp-file cleanup. Runs `forge admin maintenance`
+# against the live data directory as the forge user.
+[Unit]
+Description=forge nightly maintenance
+After=forge.service
+ConditionPathExists=/etc/forge/forge.toml
+
+[Service]
+Type=oneshot
+User=forge
+Group=forge
+ExecStart=/usr/local/bin/forge admin maintenance --config /etc/forge/forge.toml
+Nice=10
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=400M
+TasksMax=128
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/forge
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+Environment=HOME=/var/lib/forge
+Environment=GIT_CONFIG_NOSYSTEM=1

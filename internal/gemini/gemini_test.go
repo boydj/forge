@@ -35,6 +35,8 @@ func TestParseRequestLine(t *testing.T) {
 		{"titan://example.org/~a/r;size=5/../new", false, "", "", 0, "", ""},
 		{"titan://example.org/~a/r/issues/new;size=5;evil=1", false, "", "", 0, "", ""},
 		{"titan://example.org/x;size=1;mime=image%2Fpng", true, "titan", "/x", 1, "image/png", ""},
+		{"titan://example.org/~a/r/issues/3;edit", true, "titan", "/~a/r/issues/3", 0, "text/gemini", ""},
+		{"titan://example.org/~a/r/issues/3;edit;size=4", false, "", "", 0, "", ""},
 	}
 	for _, c := range cases {
 		u, tp, err := parseRequestLine(c.in)

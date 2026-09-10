@@ -1,51 +1,64 @@
 # environments/dev
 
-Root module that publishes DNS for one development POP (`ewr1`) plus the
-anycast `git.as215520.net` records, by calling `modules/cloudflare-dns`.
+Root module for one development POP (`ewr1`): DNS (`modules/cloudflare-dns`),
+node definition (`modules/forge-node`) and the Vultr instance
+(`modules/vultr-pop`). Each half is toggled independently:
+
+| Toggle | Default | Needs | Effect |
+|---|---|---|---|
+| `create_dns` | `true` | `CLOUDFLARE_API_TOKEN` | `git.<zone>` A/AAAA/SSHFP, `<pop>.nodes.<zone>` |
+| `create_node` | `false` | `VULTR_API_KEY`, `bootstrap_ssh_public_key` | `vultr_ssh_key` + firewall group + instance with the rendered cloud-init |
+
+With `create_node = true` the instance's provider addresses are merged into
+the DNS `nodes` map, so `ewr1.nodes.<zone>` follows the instance. The
+`forge-node` module is always evaluated (it only renders templates), so
+`tofu output -raw cloud_init` works without any credentials.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `versions.tf` | OpenTofu + provider pins. |
-| `providers.tf` | Empty `provider "cloudflare" {}`; credentials come from the environment. |
-| `variables.tf` | Inputs (addresses, nodes, SSHFP, DNSSEC toggle). |
-| `dns.tf` | Module call and outputs. |
-| `dev.auto.tfvars.example` | Placeholder values. Copy to `dev.auto.tfvars`, which is git-ignored. |
+| `versions.tf` | OpenTofu + provider pins (cloudflare ~> 5.24, vultr ~> 2.32). |
+| `providers.tf` | Empty provider blocks; credentials come from the environment. |
+| `variables.tf` | Inputs: addresses, nodes, SSHFP, toggles, POP settings. |
+| `dns.tf` | cloudflare-dns module call and outputs. |
+| `node.tf` | forge-node module call (`cloud_init` output). |
+| `vultr.tf` | bootstrap `vultr_ssh_key`, vultr-pop module, `pop` output. |
+| `dev.auto.tfvars.example` | Placeholder values. Copy to `dev.auto.tfvars` (git-ignored). |
 
-## Credentials: `CLOUDFLARE_API_TOKEN`
+## Credentials
 
-The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment.
-The token is never a Tofu variable, never in a `.tfvars`, never in state.
-
-Create the token in the Cloudflare dashboard (My Profile → API Tokens →
-Create Token → "Edit zone DNS" template) with:
-
-* Permissions: `Zone → DNS → Edit`, `Zone → Zone → Read`
-  (Zone Read can be dropped if `zone_id` is set in tfvars)
-* Zone Resources: Include → Specific zone → `as215520.net`
-* Optionally restrict client IP and set an expiry.
-
-Store it SOPS-encrypted, e.g. `secrets/cloudflare.dev.env`:
-
-```sh
-# one-time
-printf 'CLOUDFLARE_API_TOKEN=%s\n' "$(cat token.txt)" | sops --encrypt --input-type dotenv --output-type dotenv /dev/stdin > secrets/cloudflare.dev.env
-shred -u token.txt
-```
-
-and run Tofu inside a shell that only sees the decrypted value:
+Both providers read the environment: `CLOUDFLARE_API_TOKEN` and
+`VULTR_API_KEY`. They live SOPS-encrypted in `infra/secrets/dev.enc.yaml`
+(schema in `infra/secrets/README.md`); `scripts/secrets env` prints the
+`export` lines, so:
 
 ```sh
 cd infra/opentofu/environments/dev
-cp dev.auto.tfvars.example dev.auto.tfvars   # edit with real addresses
-sops exec-env ../../../../secrets/cloudflare.dev.env 'tofu init && tofu plan'
-sops exec-env ../../../../secrets/cloudflare.dev.env 'tofu apply'
+cp dev.auto.tfvars.example dev.auto.tfvars   # edit with real values
+eval "$(../../../../scripts/secrets env ../../../secrets/dev.enc.yaml)"
+tofu init && tofu plan
+tofu apply
 ```
 
-`sops exec-env` decrypts into the child's environment only; nothing lands on
-disk and the token is not in your shell history. Rotate the token in the
-dashboard and re-encrypt the file when an operator leaves.
+Cloudflare token: dashboard → My Profile → API Tokens → "Edit zone DNS"
+template, `Zone → DNS → Edit` plus `Zone → Zone → Read` (drop Zone Read when
+`zone_id` is set), scoped to `as215520.net`.
+Vultr key: console → Account → API, enable the API and restrict access to
+your source IPs (v4 and v6). It grants full account access; there is no
+scoping.
+
+## Order of operations for a new POP
+
+1. `create_dns = true`, `create_node = false`: publish anycast records.
+2. Set `bootstrap_ssh_public_key`, `create_node = true`, apply. The instance
+   boots with cloud-init (`modules/forge-node/README.md` lists what it does).
+   `tofu output pop` prints the addresses and the admin SSH line.
+3. `scripts/deploy init-node ewr1` collects the node's age recipient;
+   `scripts/deploy ewr1` pushes binary, configs and secrets.
+4. Request BGP on the account (console; needs this live instance) and BYOIP
+   onboarding, see `docs/research/vultr.md`. Until then the node serves on
+   its provider addresses only.
 
 ## Validation without credentials
 
@@ -55,17 +68,11 @@ tofu init -backend=false
 tofu validate
 ```
 
-`validate` needs the provider binary (init downloads it) but no token and no
-network access to Cloudflare.
-
 ## First apply against an existing zone
 
-Records that already exist by hand in the zone (for example an `A` for
-`git.as215520.net` created in the dashboard) must be imported, not recreated:
+Records that already exist by hand in the zone must be imported, not
+recreated:
 
 ```sh
-tofu import 'module.dns.cloudflare_dns_record.service_a["203.0.113.1"]' <zone_id>/<record_id>
+tofu import 'module.dns[0].cloudflare_dns_record.service_a["203.0.113.1"]' <zone_id>/<record_id>
 ```
-
-Record IDs: `curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
-"https://api.cloudflare.com/client/v4/zones/<zone_id>/dns_records?name=git.as215520.net"`.

@@ -5,6 +5,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 rc=0
+# The Vultr provider requires an API key even for validate; any value works.
+export VULTR_API_KEY="${VULTR_API_KEY:-validate-only}"
 if command -v tofu >/dev/null 2>&1; then
   for d in $(find infra/opentofu -name '*.tf' -printf '%h\n' | sort -u); do
     echo "tofu: $d"

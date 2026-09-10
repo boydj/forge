@@ -1,0 +1,11 @@
+[Unit]
+Description=Run forge maintenance nightly
+
+[Timer]
+# 03:30 local (nodes run UTC); jittered so POPs do not gc in lock-step.
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=45min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
