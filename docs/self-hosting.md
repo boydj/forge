@@ -121,7 +121,7 @@ anycast; a single node skips them (the `forge.service` unit only *wants*
 | binary | scp to `~deploy/forge.new`, `install` to `/usr/local/bin/forge.new`, previous kept as `forge.prev`, `mv` into place (atomic) |
 | units | `infra/systemd/*`, `infra/backup/forge-backup`, `scripts/bgp-announce` (if present), `daemon-reload` |
 | configs | `forge.toml` + `nftables.conf` from `tofu output` (or `--config-dir`); `infra/bird/generated/<pop>/bird.conf`; `infra/wireguard/generated/<pop>/wg0.conf`; `state.conf` seeded only if the node has none |
-| secrets | node's subset from the SOPS bundle, tar, `age -r <node recipient>`, scp, decrypted **on the node** with `/etc/forge/age.key` into `/etc/forge/secrets/` (root:forge 0640); `__WG_PRIVATE_KEY__`, `__BGP_MD5__`, `__PROVIDER_IPV4/6__` placeholders filled |
+| secrets | node's subset from the SOPS bundle, tar, `age -r <node recipient>`, scp, decrypted **on the node** with `/etc/forge/age.key` into `/run/forge/secrets/` (root:forge 0640); `__WG_PRIVATE_KEY__`, `__BGP_MD5__`, `__PROVIDER_IPV4/6__` placeholders filled |
 | restart | `nft -c` + reload, `wg-quick@wg0` (if config complete), `bird -p` + `birdc configure`, `systemctl restart forge` |
 | smoke | Gemini request `gemini://git.<zone>/status` via `openssl s_client` against the node's unicast name expecting a `2x`/`3x` header; SSH banner `SSH-2.0-...` on port 22 |
 
@@ -134,7 +134,7 @@ Other verbs: `rollback <pop>` (swap `forge.prev` back), `drain <pop>` /
 ```
 /usr/local/bin/forge            binary (+ forge.prev)
 /etc/forge/forge.toml           config (root:forge 0640)
-/etc/forge/secrets/             tls/server.{key,crt} ssh/host_ed25519 cluster.secret wg.key bgp.password backup.recipient
+/run/forge/secrets/             tls/server.{key,crt} ssh/host_ed25519 cluster.secret wg.key bgp.password backup.recipient
 /etc/forge/age.key              node identity (never leaves the node); age.pub = recipient
 /var/lib/forge/                 forge.db, repos/, assets/, tmp/ (forge:forge 0750)
 /var/backups/forge/             <stamp>.tar.zst.age (forge-backup.timer, daily)

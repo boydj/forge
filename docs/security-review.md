@@ -30,9 +30,12 @@ verification), SR-04 (refs of changes closed for 90 days pruned by
 maintenance; `refs/changes/*` replicated), SR-05, SR-06, SR-07, SR-08, SR-09,
 SR-10 (16-byte codes, per-IP enrolment limiter), SR-11, SR-12, SR-13, SR-14,
 SR-15, SR-16, SR-17, SR-18, SR-19c, SR-20a, SR-21, SR-22, SR-23, SR-25.
-Open: SR-02 (secrets on persistent disk: tmpfs delivery is tracked in
-`docs/status.md` technical debt), SR-19a/b (deploy sudo scope, first-deploy
-TOFU), SR-20b (`uploadpackfilter` limits), SR-24 (informational).
+Also applied: SR-02 (secrets decrypted only into `/run/forge` by
+`forge-secrets.service`; the node age key is the sole persistent secret),
+SR-19a (deploy sudo limited to `forge-deploy-helper`), SR-19b (pinned host
+keys in `infra/known_hosts`, `StrictHostKeyChecking=yes`), SR-20b
+(`uploadpackfilter` limited to blob:none, blob:limit and tree depth 3).
+Open: SR-24 (informational).
 
 ## 1. Summary
 

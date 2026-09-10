@@ -79,7 +79,7 @@ deadline 60 s.
   hook.sock                              Unix socket (0600) for hook RPC; recreated at start
 ```
 
-Production nodes keep the identities under `/etc/forge/secrets/` and point
+Production nodes keep the identities under `/run/forge/secrets/` and point
 `gemini.cert_file`, `gemini.key_file` and `ssh.host_key_file` there
 (`scripts/deploy` renders that configuration).
 

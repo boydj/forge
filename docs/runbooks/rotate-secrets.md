@@ -6,7 +6,10 @@ WireGuard keys, the cluster secret, the BGP MD5 password, the backup key,
 and provider API tokens. TLS and host key have their own runbooks.
 `scripts/secrets rotate <what>` prints the short form of each.
 
-**Preconditions**: operator age key; every affected POP reachable on 2200.
+**Preconditions**: operator age key; every affected POP reachable on 2200
+and pinned in `infra/known_hosts`. Node-side commands below go through
+`scripts/deploy` (the `deploy` user has no general sudo); anything ad hoc is
+`ssh -p 2200 -o UserKnownHostsFile=infra/known_hosts root@<pop>.nodes.<zone>`.
 
 **Duration**: 5-30 min each; WireGuard and cluster secret touch every POP.
 
@@ -41,15 +44,20 @@ Rollback: re-add the recipient, `updatekeys`.
 
 ## Node age key (re-enrol a node)
 
-Generated on the node, never leaves it. To rotate:
+Generated on the node, never leaves it; it is the one secret that persists
+on the node's disk because it is what decrypts `/etc/forge/secrets.tar.age`
+into tmpfs at every boot (`docs/secrets.md`, "On the node"). To rotate:
 
 ```sh
-ssh -p 2200 deploy@<pop>.nodes.<zone> 'sudo sh -c "umask 077; mv /etc/forge/age.key /etc/forge/age.key.old; age-keygen -o /etc/forge/age.key 2>/dev/null; age-keygen -y /etc/forge/age.key > /etc/forge/age.pub"'
-scripts/deploy init-node <pop>                        # records the new recipient in infra/secrets/nodes/<pop>.age.pub
+scripts/deploy init-node <pop> --rotate-key           # node: age.key -> age.key.old, new key; records the new recipient in infra/secrets/nodes/<pop>.age.pub
 git commit -am "secrets: re-enrol <pop>"
-scripts/deploy <pop> --binary bin/forge               # re-ships the subset encrypted to the new key
-ssh -p 2200 deploy@<pop>.nodes.<zone> 'sudo rm /etc/forge/age.key.old'
+scripts/deploy <pop> --binary bin/forge               # re-ships the subset encrypted to the new key; forge-secrets accepts either key meanwhile
 ```
+
+The helper deletes `age.key.old` itself once the freshly shipped bundle
+decrypts with the new key alone (end of `apply`), so a reboot between the
+two steps still brings the node up. Verify: `scripts/deploy status <pop>`
+shows `forge-secrets active`; as root, `ls /etc/forge` has no `age.key.old`.
 
 If the node was ever listed in `.sops.yaml`, remove it and `updatekeys`.
 
@@ -67,8 +75,9 @@ for peer in <other pops>; do scripts/deploy $peer --binary bin/forge; done   # t
 
 The mesh is broken between the rotated POP and each peer until that peer
 is deployed; replication and metrics pause meanwhile (reads keep serving
-from local copies). Verify with `sudo wg show` on each node (recent
-`latest handshake`) and `forge admin pop status` (rows return to `ok`).
+from local copies). Verify with `scripts/deploy status <pop>` on each node
+(wg0 peers with a recent `latest handshake`) and `forge admin pop status`
+(rows return to `ok`).
 
 Rollback: put the old private/public pair back in the bundle and plan,
 `netgen`, redeploy all.
@@ -96,8 +105,8 @@ scripts/secrets edit infra/secrets/dev.enc.yaml       # vultr_bgp_password
 git commit -am "secrets: rotate BGP password"
 for pop in <vultr pops>; do
   scripts/deploy drain $pop                            # session will flap
-  scripts/deploy $pop --binary bin/forge               # fills __BGP_MD5__ in bird.conf, birdc configure
-  ssh -p 2200 deploy@$pop.nodes.<zone> 'sudo birdc show protocols | grep -i bgp'   # Established
+  scripts/deploy $pop --binary bin/forge               # forge-secrets renders __BGP_MD5__ into /run/forge/bird.conf, birdc configure
+  scripts/deploy status $pop | grep -i bgp             # Established
   scripts/deploy undrain $pop
 done
 ```
@@ -108,8 +117,8 @@ done
 scripts/secrets gen-backup-key                        # new AGE-SECRET-KEY + recipient
 scripts/secrets edit infra/secrets/dev.enc.yaml       # backup_encryption_key = new; KEEP the old one as backup_encryption_key_prev
 git commit -am "secrets: rotate backup key"
-for pop in <all pops>; do scripts/deploy $pop --binary bin/forge; done     # pushes the new /etc/forge/secrets/backup.recipient
-ssh -p 2200 deploy@<pop>.nodes.<zone> 'sudo systemctl start forge-backup.service; sudo ls -l /var/backups/forge | tail -2'
+for pop in <all pops>; do scripts/deploy $pop --binary bin/forge; done     # new /run/forge/secrets/backup.recipient once forge-secrets restarts
+ssh -p 2200 -o UserKnownHostsFile=infra/known_hosts root@<pop>.nodes.<zone> 'systemctl start forge-backup.service; ls -l /var/backups/forge | tail -2'
 ```
 
 Archives already on disk are encrypted to the **old** recipient: keep the

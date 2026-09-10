@@ -11,6 +11,11 @@ Wants=network-online.target
 # (single-node install) the unit still starts, since this is only a Wants.
 Wants=wg-quick@wg0.service
 After=wg-quick@wg0.service
+# Secrets live in tmpfs: forge-secrets.service decrypts them into
+# /run/forge/secrets before we start (SR-02). Hard dependency: without it
+# there is no TLS key, no host key, no cluster secret.
+Requires=forge-secrets.service
+After=forge-secrets.service
 ConditionPathExists=/etc/forge/forge.toml
 ConditionPathExists=/usr/local/bin/forge
 
@@ -38,13 +43,15 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 
 # Filesystem: read-only everything except the data directory and its own
-# runtime/state directories. /etc/forge is readable for the config, TLS key,
-# host key and secrets that scripts/deploy places there (group forge, 0640).
+# state/log directories. /etc/forge/forge.toml is group-forge readable; the
+# TLS key, host key and cluster secret are read from /run/forge/secrets
+# (tmpfs, 0700 forge, written by forge-secrets.service). Deliberately no
+# RuntimeDirectory=forge here: /run/forge belongs to forge-secrets.service and
+# systemd would recursively chown it to forge (see that unit).
 ProtectSystem=strict
 ProtectHome=yes
 ReadWritePaths=/var/lib/forge
 StateDirectory=forge
-RuntimeDirectory=forge
 LogsDirectory=forge
 PrivateTmp=yes
 PrivateDevices=yes

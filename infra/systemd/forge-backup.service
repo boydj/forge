@@ -4,13 +4,16 @@
 # script (rclone to object storage, see docs/costs.md).
 [Unit]
 Description=forge backup
-After=forge.service
+After=forge.service forge-secrets.service
+Wants=forge-secrets.service
 ConditionPathExists=/etc/forge/forge.toml
 
 [Service]
 Type=oneshot
 User=root
 ExecStart=/usr/local/bin/forge-backup
+# backup recipient (public) comes from the tmpfs secrets directory (SR-02)
+Environment=RECIPIENT_FILE=/run/forge/secrets/backup.recipient
 Nice=10
 IOSchedulingClass=idle
 CPUQuota=50%

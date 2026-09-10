@@ -71,9 +71,8 @@ None deployed. Local: `make run` serves gemini://localhost:1965/ and ssh://local
 
 ## Technical debt
 
-- Security review open items: SR-02 decrypted secrets on persistent disk
-  (tmpfs delivery in progress), SR-19a/b deploy sudo scope and first-deploy
-  TOFU (in progress), SR-24 informational.
+- Security review: all findings remediated except SR-24 (informational).
+  Existing nodes (none deployed yet) would migrate with `deploy sysupdate`.
 - Forwarded Titan writes trust the replica's TLS verification of the client
   certificate (documented in `docs/replication.md`).
 
@@ -98,7 +97,7 @@ None blocking application work. Items that will need the operator (batched, not 
 
 ## Next executable work
 
-1. Finish tmpfs secrets delivery and scoped sudo (infra agent).
+1. M4 waits on operator input (see human blockers); everything below it is code-complete.
 2. M4: `tofu plan/apply` for the dev environment once credentials and spend approval exist; then `scripts/deploy ewr1` and the runbook smoke test.
 3. M6/M7: operator actions in `docs/runbooks/network-bootstrap.md`; `scripts/netcheck --expect announced` after Vultr approval.
 4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).

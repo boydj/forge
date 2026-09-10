@@ -13,7 +13,7 @@ here.
 | `<data_dir>/forge.db` (+ `-wal`, `-shm`) | all metadata: accounts, certificate and key hashes, repositories, ACLs, issues, comments, events | no: back up |
 | `<data_dir>/repos/<owner>/<repo>.git` | bare repositories (content) | no: back up |
 | `<data_dir>/assets/` | release assets (planned) | no: back up |
-| `<data_dir>/tls/`, `<data_dir>/ssh/` (dev) or `/etc/forge/secrets/` (prod) | service identities | from the SOPS bundle (prod); losing them is a rotation event, see `docs/tls.md` |
+| `<data_dir>/tls/`, `<data_dir>/ssh/` (dev) or `/run/forge/secrets/` (prod) | service identities | from the SOPS bundle (prod); losing them is a rotation event, see `docs/tls.md` |
 | `<data_dir>/tmp/`, `hooks/`, `hook.sock` | scratch, regenerated at start | yes |
 | `/etc/forge/forge.toml` | configuration | from `tofu output`/`--config-dir` |
 
@@ -48,7 +48,7 @@ forge admin backup --config /etc/forge/forge.toml --out /var/backups/forge/forge
 for r in /var/lib/forge/repos/*/*.git; do
   git -C "$r" bundle create "/var/backups/forge/bundles/$(basename $(dirname $r))-$(basename $r .git).bundle" --all 2>/dev/null || true
 done
-tar -C /var/backups/forge -cf - forge.db bundles | zstd | age -r "$(cat /etc/forge/secrets/backup.recipient)" -o /var/backups/forge/<stamp>.tar.zst.age
+tar -C /var/backups/forge -cf - forge.db bundles | zstd | age -r "$(cat /run/forge/secrets/backup.recipient)" -o /var/backups/forge/<stamp>.tar.zst.age
 ```
 
 `forge-backup` (installed by `scripts/deploy`, run daily by

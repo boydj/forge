@@ -8,6 +8,10 @@ embedded files, indented the way the template expects) and checks that:
 * the result parses as YAML and starts with `#cloud-config`;
 * the embedded systemd units, nftables ruleset, forge.toml and backup
   script survive the YAML block scalars byte-for-byte;
+* the inline copies of forge-secrets.service and forge-deploy-helper (which
+  modules/forge-node cannot pass as variables) match infra/systemd/;
+* the deploy user's sudo is scoped to the helper (SR-19a) and secrets are
+  read from /run/forge, never /etc/forge/secrets (SR-02);
 * the template stays under the agreed size and uses no `%{ }` directives
   (which this test cannot emulate);
 * forge.toml.tftpl renders to valid TOML.
@@ -33,7 +37,13 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 CLOUD_INIT = os.path.join(ROOT, "infra", "cloud-init", "node.yaml.tftpl")
 FORGE_TOML = os.path.join(ROOT, "infra", "cloud-init", "forge.toml.tftpl")
 NFTABLES = os.path.join(ROOT, "infra", "firewall", "nftables.conf.tftpl")
-MAX_LINES = 250
+SYSTEMD = os.path.join(ROOT, "infra", "systemd")
+HELPER = os.path.join(SYSTEMD, "forge-deploy-helper")
+SECRETS_UNIT = os.path.join(SYSTEMD, "forge-secrets.service")
+DEPLOY = os.path.join(ROOT, "scripts", "deploy")
+# 250 lines of template plus the two inline files (helper ~165, unit ~40).
+MAX_LINES = 480
+SUDO_RULE = "ALL=(root) NOPASSWD: /usr/local/sbin/forge-deploy-helper *"
 
 PLACEHOLDER_RE = re.compile(r"\$\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}")
 INDENT_RE = re.compile(r"\$\{\s*indent\(\s*(\d+)\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)\s*\}")
@@ -147,6 +157,8 @@ class CloudInitTemplate(unittest.TestCase):
         self.assertEqual(names, ["forge", "deploy"])
         deploy = doc["users"][1]
         self.assertEqual(len(deploy["ssh_authorized_keys"]), 2)
+        self.assertEqual(deploy["sudo"], [SUDO_RULE], "deploy may sudo only the helper (SR-19a)")
+        self.assertNotIn("NOPASSWD:ALL", self.rendered)
         for pkg in ("git", "bird2", "wireguard-tools", "nftables", "age", "unattended-upgrades", "prometheus-node-exporter"):
             self.assertIn(pkg, doc["packages"])
         for item in doc["runcmd"]:
@@ -176,6 +188,19 @@ class CloudInitTemplate(unittest.TestCase):
         for path in ("/etc/nftables.conf", "/etc/bird/bird.conf", "/etc/default/prometheus-node-exporter"):
             self.assertTrue(files[path].get("defer"), f"{path} is shipped by a package; must use defer: true")
         self.assertEqual(files["/usr/local/bin/forge-backup"]["permissions"], "0755")
+        # Inline copies (no template variable exists for them): byte-for-byte with infra/systemd.
+        self.assertEqual(files["/usr/local/sbin/forge-deploy-helper"]["content"].rstrip("\n"), read(HELPER).rstrip("\n"))
+        self.assertEqual(files["/usr/local/sbin/forge-deploy-helper"]["permissions"], "0755")
+        self.assertEqual(files["/etc/systemd/system/forge-secrets.service"]["content"].rstrip("\n"), read(SECRETS_UNIT).rstrip("\n"))
+
+    @unittest.skipIf(yaml is None, "PyYAML not installed")
+    def test_runcmd_secrets_and_helper(self):
+        doc = yaml.safe_load(self.rendered)
+        joined = "\n".join(" ".join(map(str, c)) for c in doc["runcmd"])
+        self.assertIn("systemctl enable --now forge-secrets.service", joined)
+        self.assertIn("/usr/local/sbin/forge-deploy-helper init-node", joined)
+        self.assertNotIn("/etc/forge/secrets", joined, "no plaintext secrets directory on the root filesystem (SR-02)")
+        self.assertIn("ssh_host_ed25519_key.pub", joined, "host key must be printed to the console for pinning (SR-19b)")
 
     def test_no_downloads_in_runcmd(self):
         doc = yaml.safe_load(self.rendered) if yaml else None
@@ -196,6 +221,94 @@ class ForgeTomlTemplate(unittest.TestCase):
         self.assertEqual(cfg["ssh"]["port"], 22)
         self.assertTrue(cfg["cluster"]["enabled"])
         self.assertEqual(cfg["metrics"]["listen"], "[fd42::1]:9100")
+
+    @unittest.skipIf(tomllib is None, "tomllib needs Python 3.11+")
+    def test_secrets_in_tmpfs(self):
+        cfg = tomllib.loads(render_toml())
+        for path in (cfg["gemini"]["cert_file"], cfg["gemini"]["key_file"], cfg["ssh"]["host_key_file"], cfg["cluster"]["secret_file"]):
+            self.assertTrue(path.startswith("/run/forge/secrets/"), path)
+        self.assertNotIn("/etc/forge/secrets", render_toml())
+
+
+class SecretsUnits(unittest.TestCase):
+    """forge-secrets.service, forge.service and the helper agree on the tmpfs layout (SR-02)."""
+
+    def test_forge_requires_secrets_unit(self):
+        unit = read(os.path.join(SYSTEMD, "forge.service"))
+        self.assertIn("Requires=forge-secrets.service", unit)
+        self.assertIn("After=forge-secrets.service", unit)
+        # /run/forge belongs to forge-secrets.service; a second RuntimeDirectory=forge would chown it to forge.
+        self.assertNotRegex(unit, r"(?m)^RuntimeDirectory=")
+        self.assertNotIn("/etc/forge/secrets", unit)
+
+    def test_secrets_unit(self):
+        unit = read(SECRETS_UNIT)
+        for needle in ("Type=oneshot", "RemainAfterExit=yes", "RuntimeDirectory=forge", "RuntimeDirectoryPreserve=yes",
+                       "ExecStart=/usr/local/sbin/forge-deploy-helper load-secrets", "WantedBy=multi-user.target"):
+            self.assertIn(needle, unit)
+        before = re.search(r"(?m)^Before=(.*)$", unit).group(1).split()
+        for dep in ("forge.service", "bird.service", "wg-quick@wg0.service"):
+            self.assertIn(dep, before)
+
+    def test_backup_reads_recipient_from_tmpfs(self):
+        unit = read(os.path.join(SYSTEMD, "forge-backup.service"))
+        self.assertIn("Environment=RECIPIENT_FILE=/run/forge/secrets/backup.recipient", unit)
+
+    def test_units_and_helper_use_no_template_directives(self):
+        # Both are pasted into node.yaml.tftpl verbatim: templatefile would choke on ${ or %{.
+        for path in (HELPER, SECRETS_UNIT):
+            text = read(path)
+            self.assertNotIn("${", text, path)
+            self.assertNotIn("%{", text, path)
+
+
+class DeployHelper(unittest.TestCase):
+    """The deploy user's only root command: small, strict, data-only (SR-19a)."""
+
+    def setUp(self):
+        self.helper = read(HELPER)
+
+    def test_shape(self):
+        self.assertTrue(self.helper.startswith("#!/bin/bash\n"))
+        self.assertIn("set -euo pipefail", self.helper)
+        self.assertIn("umask 077", self.helper)
+        self.assertIn('[ "$(id -u)" = 0 ] || die', self.helper)
+
+    def test_allowlist_is_data_only(self):
+        block = self.helper[self.helper.index("spec() {"):self.helper.index("check() {")]
+        names = re.findall(r"^\s+([A-Za-z0-9.]+)\)\s+echo\s+(\S+)", block, re.M)
+        self.assertEqual(
+            sorted(n for n, _ in names),
+            ["bird.conf", "forge.toml", "nftables.conf", "secrets", "state.conf", "wg0.conf"],
+        )
+        for _, path in names:
+            self.assertFalse(path.startswith(("/usr/local/bin", "/usr/local/sbin", "/etc/systemd", "/etc/sudoers")), path)
+        # what wg-quick would run as root is checked
+        self.assertIn("(Pre|Post)(Up|Down)", self.helper)
+
+    def test_tmpfs_paths(self):
+        self.assertIn("RUN=/run/forge", self.helper)
+        self.assertIn("BUNDLE=/etc/forge/secrets.tar.age", self.helper)
+        self.assertIn("rm -rf /etc/forge/secrets", self.helper)
+        for link in ("/etc/wireguard/wg0.conf", "/etc/bird/bird.conf"):
+            self.assertIn(link, self.helper)
+
+    def test_bash_syntax(self):
+        import subprocess
+        for path in (HELPER, DEPLOY):
+            subprocess.run(["bash", "-n", path], check=True)
+
+
+class DeployScript(unittest.TestCase):
+    def test_strict_host_keys_and_helper_only(self):
+        s = read(DEPLOY)
+        self.assertIn("StrictHostKeyChecking=yes", s)
+        self.assertNotIn("accept-new", s)
+        self.assertIn('KNOWN_HOSTS="$ROOT/infra/known_hosts"', s)
+        self.assertNotIn("deploy ALL=(ALL) NOPASSWD:ALL", s)  # only the sysupdate cleanup sed may mention it
+        self.assertNotIn("/etc/forge/secrets/", s)
+        # the deploy user never runs anything as root other than the helper
+        self.assertNotIn("sudo -n sh", s)
 
 
 class NftablesTemplate(unittest.TestCase):

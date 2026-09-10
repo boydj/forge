@@ -11,8 +11,12 @@ Decision: `docs/decisions/0007-secrets-sops-age.md`. Schema:
         |                             (committed, age-encrypted)
         | sops -d --extract (per key)
         v
-   node subset (tar)  --age -r <node recipient>-->  scp  -->  age -d -i /etc/forge/age.key
-                                                             /etc/forge/secrets/*
+   node subset (tar)  --age -r <node recipient>-->  ssh stdin  -->  /etc/forge/secrets.tar.age   (disk, root 0600)
+                                                                        |  forge-secrets.service, at boot and on deploy:
+                                                                        |  age -d -i /etc/forge/age.key | tar -x
+                                                                        v
+                                                                    /run/forge/secrets/*   (tmpfs, forge 0700)
+                                                                    /run/forge/wg0.conf, /run/forge/bird.conf (rendered)
 ```
 
 * **One bundle per environment**, YAML, every leaf encrypted (SOPS
@@ -25,10 +29,45 @@ Decision: `docs/decisions/0007-secrets-sops-age.md`. Schema:
 * **Node keys** are generated on the node (cloud-init or `deploy bootstrap`)
   and never leave it. `scripts/deploy init-node <pop>` stores the *public*
   half in `infra/secrets/nodes/<pop>.age.pub` (committed).
+* **Nothing decrypted rests on a node's disk** (threat model invariant I-18,
+  security review SR-02). See "On the node" below.
 * **Provider credentials** (`VULTR_API_KEY`, `CLOUDFLARE_API_TOKEN`) exist
   only in the environment of the `tofu` process:
   `eval "$(scripts/secrets env infra/secrets/dev.enc.yaml)"`. Never a
   variable, never in tfvars or state.
+
+## On the node
+
+Two files persist on the root filesystem, both root-only (0600):
+
+| Path | What | Why it must persist |
+|---|---|---|
+| `/etc/forge/age.key` | the node's age identity | The one secret that has to survive a reboot: it is what turns the bundle below back into keys. It decrypts only *this node's* subset, never leaves the machine and is worthless without the bundle. A disk image therefore still yields this node's keys to whoever can read both files; the exposure is one node, not the fleet, and the answer is `rebuild-pop.md` plus rotation of what that node held. |
+| `/etc/forge/secrets.tar.age` | the node's subset, age-encrypted to that key | Written by `scripts/deploy` through `forge-deploy-helper write-config secrets`. |
+
+Everything else lives in tmpfs and is recreated by `forge-secrets.service`
+(`infra/systemd/forge-secrets.service`, a root oneshot ordered `Before=`
+`forge.service`, `bird.service` and `wg-quick@wg0.service`, restarted by
+every `deploy`):
+
+```
+/run/forge/                       0755 root   (RuntimeDirectory of forge-secrets.service)
+  secrets/                        0700 forge  tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient
+  wg0.conf                        0600 root   /etc/wireguard/wg0.conf.in with __WG_PRIVATE_KEY__ filled; /etc/wireguard/wg0.conf -> here
+  bird.conf                       0640 bird   /etc/bird/bird.conf.in with __BGP_MD5__ filled;           /etc/bird/bird.conf -> here
+```
+
+`forge.toml` points `cert_file`, `key_file`, `host_key_file` and
+`secret_file` into `/run/forge/secrets/`; `forge-backup.service` reads the
+backup recipient from there too. The generated `bird.conf` / `wg0.conf`
+stay on disk as `.in` files with their placeholders; while a placeholder is
+unfilled (no secret shipped, or `netgen --overrides` not run) the rendered
+file is removed and the unit fails to start, which is the safe direction
+(nothing announced, no tunnel with a bogus key). `age` is the only tool the
+node needs; `sops` never runs on nodes (Debian does not package it, and
+pushing an unsigned binary from a laptop would add a supply-chain path).
+The helper deletes the pre-tmpfs `/etc/forge/secrets/` directory on the
+first `load-secrets` after the change.
 
 ## Commands
 
@@ -70,8 +109,10 @@ Decision: `docs/decisions/0007-secrets-sops-age.md`. Schema:
    `.sops.yaml`, commit `.sops.yaml`.
 2. `scripts/secrets edit infra/secrets/dev.enc.yaml`; generate values with
    the `gen-*` commands; commit the encrypted file.
-3. Bring up a node; `scripts/deploy init-node <pop>`; commit
-   `infra/secrets/nodes/<pop>.age.pub`.
+3. Bring up a node; `scripts/deploy init-node <pop> --hostkey-fingerprint
+   SHA256:...` (fingerprint from the node console; pins the sshd host key in
+   `infra/known_hosts`); commit `infra/secrets/nodes/<pop>.age.pub` and
+   `infra/known_hosts`.
 4. `scripts/deploy <pop>`.
 
 Adding an operator: they run `secrets init`, you add their recipient to
@@ -85,3 +126,6 @@ the reverse, plus `secrets rotate` of everything they could read.
   `.enc.yaml` carries `sops:` metadata).
 * `schema.example.yaml` contains placeholders only.
 * Keep the operator age key offline-backed-up; losing it loses every bundle.
+* The `deploy` user cannot read secrets and runs nothing as root except
+  `forge-deploy-helper` (`infra/systemd/forge-deploy-helper`), which accepts
+  only the binary, the data configs and the encrypted bundle on stdin.

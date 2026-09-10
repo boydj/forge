@@ -21,7 +21,7 @@ or, when the key file is missing, generates:
 Production nodes do not generate: `scripts/secrets gen-tls <host>` creates
 the same shape of certificate (valid to 2036) once, stores it in the SOPS
 bundle, and `scripts/deploy` places the identical `server.key`/`server.crt`
-on every node under `/etc/forge/secrets/tls/` (root:forge 0640). P-256
+on every node under `/run/forge/secrets/tls/` (root:forge 0640). P-256
 rather than Ed25519 because some client TLS stacks reject Ed25519 server
 certificates (`docs/secrets.md`).
 

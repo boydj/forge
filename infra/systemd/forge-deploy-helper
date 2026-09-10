@@ -1,0 +1,165 @@
+#!/bin/bash
+# forge-deploy-helper: the one command the `deploy` user may run as root
+# (sudoers: `deploy ALL=(root) NOPASSWD: /usr/local/sbin/forge-deploy-helper *`).
+# scripts/deploy feeds it files on stdin and asks it to apply them;
+# forge-secrets.service runs `load-secrets` at boot. Source of truth is
+# infra/systemd/forge-deploy-helper: installed by cloud-init and `deploy
+# bootstrap`, refreshed only by `deploy sysupdate` (root), never by `deploy`
+# itself, so a stolen deploy key cannot replace root-executed code.
+#
+#   install-binary <sha256>   stdin -> /usr/local/bin/forge (previous kept as forge.prev)
+#   write-config <name>       stdin -> forge.toml | nftables.conf | bird.conf | state.conf | wg0.conf | secrets
+#   load-secrets              decrypt /etc/forge/secrets.tar.age into /run/forge (tmpfs); render wg0/bird configs
+#   apply                     nftables, forge-secrets, wg0, bird, forge; on failure print the journal, exit 1
+#   rollback                  forge.prev -> forge, restart
+#   drain | undrain           bgp-announce withdraw | announce
+#   init-node [rotate]        ensure /etc/forge/age.key, print the recipient
+#   status                    unit states, wg0 peers, bird protocols, last forge log lines
+# No dollar-brace expansions in this file: it is embedded verbatim in a templatefile().
+set -euo pipefail
+umask 077
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN=/run/forge
+BUNDLE=/etc/forge/secrets.tar.age
+KEY=/etc/forge/age.key
+PH='__[A-Z0-9_]*__'
+
+die() { echo "forge-deploy-helper: $*" >&2; exit 1; }
+[ "$(id -u)" = 0 ] || die "must run as root (sudo)"
+
+sub() { # sub <file> <placeholder> <value>: literal replace; values travel in env so any byte is safe
+  grep -q "$2" "$1" || return 0
+  V="$3" P="$2" perl -pi -e 's/\Q$ENV{P}\E/$ENV{V}/g' "$1"
+}
+slurp() { # slurp <path>: stdin -> temp file beside <path>; prints the temp path
+  local tmp; tmp=$(mktemp "$1.XXXXXX"); cat > "$tmp"
+  [ -s "$tmp" ] || { rm -f "$tmp"; die "empty input for $1"; }
+  echo "$tmp"
+}
+# name -> path mode group. Data only: nothing here is executed as root.
+spec() {
+  case "$1" in
+    forge.toml)    echo /etc/forge/forge.toml 0640 forge;;
+    nftables.conf) echo /etc/nftables.conf 0755 root;;
+    bird.conf)     echo /etc/bird/bird.conf.in 0640 bird;;
+    state.conf)    echo /etc/bird/state.conf 0640 bird;;
+    wg0.conf)      echo /etc/wireguard/wg0.conf.in 0600 root;;
+    secrets)       echo "$BUNDLE" 0600 root;;
+    *) die "write-config: unknown name '$1' (forge.toml nftables.conf bird.conf state.conf wg0.conf secrets)";;
+  esac
+}
+check() { # check <name> <tmp>: non-zero (and a reason) for anything malformed or that would run as root
+  case "$1" in
+    nftables.conf) nft -c -f "$2";;
+    secrets) [ "$(head -c 21 "$2")" = "age-encryption.org/v1" ] || { echo "secrets: not an age file" >&2; return 1; };;
+    wg0.conf) # wg-quick runs Pre*/Post* hooks as root: allow only the one line netgen emits
+      if grep -Ei '^[[:space:]]*(Pre|Post)(Up|Down)|^[[:space:]]*SaveConfig' "$2" | grep -qvx 'PostUp = sysctl -q -w net.ipv6.conf.all.forwarding=1'; then
+        echo "wg0.conf: unexpected hook line" >&2; return 1
+      fi;;
+    bird.conf) # provider addresses are not secret: fill them now, from the default-route source addresses
+      local v4 v6
+      v4=$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.*src \([0-9.]*\).*/\1/p' | head -1)
+      v6=$(ip -6 route get 2001:4860:4860::8888 2> /dev/null | sed -n 's/.*src \([0-9a-f:]*\).*/\1/p' | head -1)
+      [ -n "$v4" ] && sub "$2" __PROVIDER_IPV4__ "$v4"
+      [ -n "$v6" ] && sub "$2" __PROVIDER_IPV6__ "$v6"
+      true;;
+  esac
+}
+
+cmd_write_config() {
+  [ $# -eq 1 ] || die "usage: write-config <name>"
+  local s path mode group tmp; s=$(spec "$1") || exit 1; read -r path mode group <<< "$s"
+  if [ "$1" = state.conf ] && grep -qs DRAIN "$path"; then cat > /dev/null; echo "state.conf: keeping live announce state"; return 0; fi
+  mkdir -p "$(dirname "$path")"; tmp=$(slurp "$path")
+  check "$1" "$tmp" || { rm -f "$tmp"; die "$1 rejected"; }
+  chown "root:$group" "$tmp"; chmod "$mode" "$tmp"; mv -f "$tmp" "$path"; echo "wrote $path"
+}
+
+cmd_install_binary() {
+  if [ $# -ne 1 ] || [ "$(printf '%s' "$1" | tr -dc 0-9a-f | wc -c)" != 64 ]; then die "usage: install-binary <sha256>"; fi
+  local tmp; tmp=$(slurp /usr/local/bin/forge)
+  echo "$1  $tmp" | sha256sum -c --quiet - || { rm -f "$tmp"; die "checksum mismatch"; }
+  [ "$(head -c 4 "$tmp" | tr -d '\177')" = ELF ] || { rm -f "$tmp"; die "not an ELF binary"; }
+  chown root:root "$tmp"; chmod 0755 "$tmp"
+  [ -e /usr/local/bin/forge ] && cp -p /usr/local/bin/forge /usr/local/bin/forge.prev
+  mv -f "$tmp" /usr/local/bin/forge; echo "installed /usr/local/bin/forge"
+}
+
+render() { # render <secret> <placeholder> <template> <out> <link> <mode> <group>
+  [ -f "$3" ] || return 0
+  local tmp="$4.tmp"; cp "$3" "$tmp"
+  [ -s "$1" ] && sub "$tmp" "$2" "$(cat "$1")"
+  if grep -q "$PH" "$tmp"; then
+    echo "warning: $3 still has placeholders ($(grep -o "$PH" "$tmp" | sort -u | tr '\n' ' ')); $5 not activated" >&2
+    rm -f "$tmp" "$4"; return 0
+  fi
+  chown "root:$7" "$tmp"; chmod "$6" "$tmp"; mv -f "$tmp" "$4"; ln -sfn "$4" "$5"
+}
+cmd_load_secrets() {
+  local stage="$RUN/.stage" new="$RUN/.secrets.new" sec="$RUN/secrets" ids f
+  mkdir -p "$RUN"; rm -rf "$stage" "$new"; install -d -m 0700 "$stage"
+  if [ -s "$BUNDLE" ]; then
+    [ -s "$KEY" ] || die "no $KEY"
+    ids="-i $KEY"; [ -s "$KEY.old" ] && ids="$ids -i $KEY.old"   # during a key rotation either may decrypt
+    # shellcheck disable=SC2086
+    age -d $ids "$BUNDLE" | tar -x -C "$stage"
+  else
+    echo "no $BUNDLE yet (run scripts/deploy); nothing to decrypt" >&2
+  fi
+  install -d -m 0700 -o forge -g forge "$new" "$new/tls" "$new/ssh"
+  for f in tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient; do
+    [ -f "$stage/$f" ] && install -m 0400 -o forge -g forge "$stage/$f" "$new/$f"
+  done
+  rm -rf "$sec.old"; [ -d "$sec" ] && mv "$sec" "$sec.old"; mv "$new" "$sec"; rm -rf "$sec.old"
+  render "$stage/wg.key" __WG_PRIVATE_KEY__ /etc/wireguard/wg0.conf.in "$RUN/wg0.conf" /etc/wireguard/wg0.conf 0600 root
+  render "$stage/bgp.password" __BGP_MD5__ /etc/bird/bird.conf.in "$RUN/bird.conf" /etc/bird/bird.conf 0640 bird
+  rm -rf "$stage"
+  rm -rf /etc/forge/secrets   # pre-tmpfs layout: never leave plaintext on the root filesystem
+}
+
+cmd_apply() {
+  systemctl daemon-reload
+  if [ -s /etc/nftables.conf ]; then nft -c -f /etc/nftables.conf && systemctl reload-or-restart nftables; fi
+  systemctl restart forge-secrets.service || { journalctl -u forge-secrets -n 20 --no-pager; die "forge-secrets failed"; }
+  [ -s "$RUN/wg0.conf" ] && systemctl restart wg-quick@wg0
+  if [ -s "$RUN/bird.conf" ]; then bird -p -c /etc/bird/bird.conf && { birdc configure > /dev/null || systemctl restart bird; }; fi
+  systemctl restart forge; sleep 2
+  systemctl is-active forge > /dev/null || { journalctl -u forge -n 30 --no-pager; die "forge is not active"; }
+  if [ -s "$KEY.old" ] && age -d -i "$KEY" "$BUNDLE" > /dev/null 2>&1; then rm -f "$KEY.old"; echo "age key rotation complete; removed $KEY.old"; fi
+  echo "applied"
+}
+cmd_rollback() {
+  [ -x /usr/local/bin/forge.prev ] || die "no /usr/local/bin/forge.prev"
+  mv -f /usr/local/bin/forge /usr/local/bin/forge.failed; mv -f /usr/local/bin/forge.prev /usr/local/bin/forge
+  systemctl restart forge; echo "rolled back"
+}
+cmd_init_node() {
+  local rotate=""; [ $# -ge 1 ] && rotate=$1
+  case "$rotate" in ""|rotate) ;; *) die "usage: init-node [rotate]";; esac
+  mkdir -p /etc/forge
+  if [ "$rotate" = rotate ] && [ -s "$KEY" ]; then mv -f "$KEY" "$KEY.old"; fi
+  [ -s "$KEY" ] || age-keygen -o "$KEY" 2> /dev/null
+  chmod 0600 "$KEY"; age-keygen -y "$KEY" > /etc/forge/age.pub; chmod 0644 /etc/forge/age.pub; cat /etc/forge/age.pub
+}
+cmd_status() {
+  local u; for u in forge forge-secrets bird wg-quick@wg0 nftables forge-backup.timer forge-maintenance.timer; do
+    printf '%-24s %s\n' "$u" "$(systemctl is-active "$u" 2> /dev/null || true)"; done
+  if command -v wg > /dev/null; then wg show wg0 2> /dev/null | grep -E '^peer|handshake' || true; fi
+  if command -v birdc > /dev/null; then birdc show protocols 2> /dev/null || true; fi
+  journalctl -u forge -n 20 --no-pager || true
+}
+
+[ $# -ge 1 ] || die "usage: forge-deploy-helper <verb> [args]"
+verb=$1; shift
+case "$verb" in
+  install-binary) cmd_install_binary "$@";;
+  write-config)   cmd_write_config "$@";;
+  load-secrets)   [ $# -eq 0 ] || die "load-secrets takes no arguments"; cmd_load_secrets;;
+  apply)          [ $# -eq 0 ] || die "apply takes no arguments"; cmd_apply;;
+  rollback)       [ $# -eq 0 ] || die "rollback takes no arguments"; cmd_rollback;;
+  drain)          [ $# -eq 0 ] || die "drain takes no arguments"; exec /usr/local/bin/bgp-announce withdraw;;
+  undrain)        [ $# -eq 0 ] || die "undrain takes no arguments"; exec /usr/local/bin/bgp-announce announce;;
+  init-node)      cmd_init_node "$@";;
+  status)         [ $# -eq 0 ] || die "status takes no arguments"; cmd_status;;
+  *) die "unknown verb '$verb'";;
+esac

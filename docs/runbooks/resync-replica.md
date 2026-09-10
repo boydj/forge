@@ -22,7 +22,7 @@ sudo -u forge forge admin pop status                          # REPO LEADER NODE
 journalctl -u forge --since "-30 min" --no-pager | grep -E 'proto=repl|control auth failed|sync'
 curl -s http://[<wg address>]:9100/metrics | grep forge_replica_lag_events
 sudo wg show                                                  # peer handshake recent?
-curl -s -H "Authorization: Bearer $(sudo cat /etc/forge/secrets/cluster.secret)" -H "X-Forge-Node: <this node>" \
+curl -s -H "Authorization: Bearer $(sudo cat /run/forge/secrets/cluster.secret)" -H "X-Forge-Node: <this node>" \
   http://[<leader wg address>]:9200/v1/status                 # 200 JSON expected; 401 = secret mismatch, 403 = name not in leader's peers
 ```
 
