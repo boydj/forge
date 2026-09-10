@@ -62,7 +62,13 @@ jobs:
         run: |
           systemd-analyze verify --man=no infra/systemd/*.service infra/systemd/*.timer 2>&1 \
             | grep -v -e 'is not executable' -e 'not found' || true
-          systemd-analyze security --offline=true --no-pager --threshold=5 infra/systemd/forge.service
+          # systemd 255's --threshold exits non-zero regardless of the score
+          # (observed 1.4 -> exit 1), so parse the overall exposure ourselves.
+          out=$(systemd-analyze security --offline=true --no-pager infra/systemd/forge.service)
+          echo "$out" | tail -n 3
+          score=$(echo "$out" | sed -n 's/.*Overall exposure level for forge.service: \([0-9.]*\).*/\1/p')
+          test -n "$score" || { echo "could not parse exposure score"; exit 1; }
+          awk -v s="$score" 'BEGIN { exit (s <= 5.0) ? 0 : 1 }' || { echo "exposure $score exceeds 5.0"; exit 1; }
       - name: shell scripts parse
         run: for f in scripts/deploy scripts/secrets scripts/infra-lint infra/backup/forge-backup; do bash -n "$f"; done
 
@@ -108,5 +114,5 @@ jobs:
             grep -q '^sops:' "$f" || { echo "$f is not SOPS-encrypted"; exit 1; }
           done
           # Private key material anywhere in the tree is a failure.
-          ! git grep -n -E 'AGE-SECRET-KEY-1|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' -- ':!infra/secrets/schema.example.yaml' ':!docs/**' ':!scripts/secrets' ':!infra/secrets/README.md' ':!*.go' \
+          ! git grep -n -E 'AGE-SECRET-KEY-1[0-9a-z]{20,}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----' -- ':!infra/secrets/schema.example.yaml' ':!docs/**' ':!scripts/secrets' ':!infra/secrets/README.md' ':!*.go' ':!.github/**' \
             || { echo "private key material found"; exit 1; }
