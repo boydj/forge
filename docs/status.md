@@ -4,9 +4,9 @@ Updated: 2026-09-10
 
 ## Current milestone
 
-**M2 Git/SSH complete; M3 Titan forge interactions** starting. M0 discovery
-finished (all six research agents reported). Infrastructure agent (Vultr POP
-module, cloud-init, systemd, secrets, CI) still running.
+**M3 complete (issues, comments, changes/reviews, releases, settings over
+Titan). M5 replication code landed; M4 single-VPS deployment is prepared but
+waits on credentials.** Health/announcement control is being integrated.
 
 ## Accomplished
 
@@ -16,6 +16,22 @@ module, cloud-init, systemd, secrets, CI) still running.
 - M0 research: `docs/research/{protocols,language-and-libraries,vultr,cloudflare-dns}.md`, `docs/threat-model.md`, `docs/network-readiness.md`.
 - M1: Gemini server, gemtext builder, git adapter, SQLite store, forge services, pages (front, user, repo overview/README, tree, blob, raw, log, commit+diff, refs), gemfeeds + Atom, account registration by client certificate, enrolment codes, SSH key management (INPUT + Titan), admin CLI.
 - M2: restricted SSH server (`internal/sshd`), hook socket protocol, pre-receive ACL/quota/ref policy, post-receive events. **First acceptance test passes** (`tests/acceptance_test.go`): create repo -> git clone -> git push -> Gemini browse, plus permission, private-repo and hook-denial checks.
+- M3: issues and comments, releases with assets, repository settings, and the
+  change/review workflow of ADR 0012 (push to `refs/for/<branch>`, versions,
+  interdiffs, patches, anchored reviews, server-side merge with
+  `merge-tree`). **Second acceptance test passes** (register -> Titan issue ->
+  Gemini read -> Titan comment -> gemfeed) and **third acceptance test passes**
+  (propose -> review -> merge).
+- M5 (code): `internal/repl` control plane over the WireGuard/loopback
+  network (shared secret), per-origin event cursors, metadata snapshots, git
+  over stateless smart HTTP, replica status, resync, leader move, Titan write
+  forwarding; `scripts/dev-cluster` for local multi-node runs.
+- Backup/restore: `forge admin backup --out x.tar.gz` (DB snapshot + git
+  bundles + assets + identities), `forge admin restore`, `forge admin
+  maintenance [--check]` (gc, fsck, size refresh, PRAGMA optimize).
+- Docs: development, titan, gemfeeds, vcs-interface, operations, tls,
+  disaster-recovery, dogfooding, misfin, replication, review-workflow,
+  git-ssh, self-hosting, secrets, costs, health.
 - Network: `infra/network/address-plan.yaml`, `scripts/netgen` (BIRD, WireGuard, DNS, nftables outputs), `scripts/bgp-announce`, BIRD configs validated with `bird -p` 2.14.
 - DNS: `infra/opentofu/modules/cloudflare-dns` validated with tofu 1.12.6.
 
@@ -26,7 +42,8 @@ None deployed. Local: `make run` serves gemini://localhost:1965/ and ssh://local
 ## Tests passing
 
 - `go test ./...`: gemini, config, vcs/git, store, forge, web, sshd, tlsid.
-- `go test -tags integration ./tests/`: first acceptance test (M2).
+- `go test -tags integration ./tests/`: three acceptance tests (M2 clone/push/browse, M3 Titan issue flow, ADR 0012 change workflow).
+- `go test ./internal/repl`: two-node replication scenarios (sync, interrupted fetch, leader move, auth).
 - `python3 -m unittest discover -s tests/network`: 21 network generator tests.
 
 ## Pending subagent work (M0)
@@ -63,8 +80,8 @@ None blocking application work. Items that will need the operator (batched, not 
 
 ## Next executable work
 
-1. M3: issues, comments, changes/reviews, releases, repository settings over Titan; feeds per kind; second acceptance test.
-2. Integrate infrastructure agent output (vultr-pop, forge-node, cloud-init, systemd, secrets, CI) and run `make lint`.
-3. Docs: development, titan, gemfeeds, vcs-interface, operations.
-4. M4: dev environment `tofu plan` once credentials exist.
-5. M5: replication and leadership.
+1. Wire `internal/health` into `forge serve` and `forge admin pop drain|undrain`.
+2. Two-node integration test on the built binary (`tests/cluster_test.go`) and failure injection (M10 prep).
+3. Restore drill test (backup -> wipe -> restore -> verify).
+4. M4: `tofu plan/apply` for the dev environment once credentials and spend approval exist.
+5. M6: operator actions in `docs/network-readiness.md`; M7+ need BGP approval.

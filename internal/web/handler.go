@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"as215520.net/forge/internal/forge"
@@ -24,6 +25,54 @@ type Handler struct {
 	Started time.Time
 	// Health reports node health for /status; nil means healthy.
 	Health func() (ok bool, detail string)
+	// Forwarder relays Titan writes for repositories led elsewhere; nil in
+	// single-node mode.
+	Forwarder Forwarder
+
+	limiter rateLimiter
+}
+
+// Forwarder is implemented by the replication node.
+type Forwarder interface {
+	Forward(ctx context.Context, leaderNode, path, mime string, body, certDER []byte) (status int, meta string, err error)
+}
+
+// rateLimiter is a per-user sliding one-minute window for Titan writes.
+type rateLimiter struct {
+	mu   sync.Mutex
+	hits map[int64][]time.Time
+}
+
+func (l *rateLimiter) allow(user int64, perMinute int) bool {
+	if perMinute <= 0 {
+		return true
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.hits == nil {
+		l.hits = map[int64][]time.Time{}
+	}
+	now := time.Now()
+	cutoff := now.Add(-time.Minute)
+	kept := l.hits[user][:0]
+	for _, t := range l.hits[user] {
+		if t.After(cutoff) {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= perMinute {
+		l.hits[user] = kept
+		return false
+	}
+	l.hits[user] = append(kept, now)
+	if len(l.hits) > 10000 {
+		for k, v := range l.hits {
+			if len(v) == 0 || !v[len(v)-1].After(cutoff) {
+				delete(l.hits, k)
+			}
+		}
+	}
+	return true
 }
 
 // request bundles per-request state.

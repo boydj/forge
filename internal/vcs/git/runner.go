@@ -104,7 +104,12 @@ func (b *Backend) Env(extra ...string) []string {
 		{"fetch.fsckObjects", "true"},
 		{"receive.autogc", "false"},
 		{"gc.auto", "0"},
-		{"receive.advertisePushOptions", "false"},
+		{"receive.advertisePushOptions", "true"},
+		// Change pushes (ADR 0012): commands under these prefixes are handed
+		// to the proc-receive hook instead of being applied by receive-pack.
+		// The key is multi-valued; GIT_CONFIG_COUNT entries accumulate.
+		{"receive.procReceiveRefs", "refs/for"},
+		{"receive.procReceiveRefs", "refs/changes"},
 		{"receive.denyCurrentBranch", "ignore"},
 		{"uploadpack.allowAnySHA1InWant", "false"},
 		{"uploadpack.allowReachableSHA1InWant", "false"},

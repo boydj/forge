@@ -37,6 +37,19 @@ type Config struct {
 	Limits  Limits  `toml:"limits"`
 	Metrics Metrics `toml:"metrics"`
 	Cluster Cluster `toml:"cluster"`
+	Health  Health  `toml:"health"`
+}
+
+// Health configures self-checks and anycast announcement control.
+type Health struct {
+	// Announcer is the path to scripts/bgp-announce; empty disables BGP
+	// control (checks still run and feed /status and metrics).
+	Announcer string `toml:"announcer"`
+	// Interval between check cycles.
+	Interval Duration `toml:"interval"`
+	// ReplicaLagMax marks the node unhealthy when replication lags more
+	// than this many events (0: ignore).
+	ReplicaLagMax int64 `toml:"replica_lag_max"`
 }
 
 // Gemini configures the Gemini/Titan listener.
@@ -110,6 +123,12 @@ type Limits struct {
 	SSHMaxConnsPerIP int `toml:"ssh_max_conns_per_ip"`
 	// WriteRatePerMinute bounds Titan writes per account.
 	WriteRatePerMinute int `toml:"write_rate_per_minute"`
+	// MaxChangeBytes bounds one push by a reader proposing a change.
+	MaxChangeBytes int64 `toml:"max_change_bytes"`
+	// MaxOpenChangesPerUser bounds open changes per user per repository.
+	MaxOpenChangesPerUser int `toml:"max_open_changes_per_user"`
+	// MaxChangeCommits bounds commits in one change version.
+	MaxChangeCommits int `toml:"max_change_commits"`
 }
 
 // Metrics configures the Prometheus endpoint (HTTP, private network only).
@@ -133,6 +152,9 @@ type Cluster struct {
 	SecretFile string `toml:"secret_file"`
 	// SyncInterval is how often replicas poll leaders.
 	SyncInterval Duration `toml:"sync_interval"`
+	// MetadataLeader names the node that owns users, certificates and SSH
+	// keys. Default: alphabetically first of this node and its peers.
+	MetadataLeader string `toml:"metadata_leader"`
 }
 
 // Duration is a TOML-friendly time.Duration.
@@ -182,27 +204,31 @@ func Default(dataDir string) *Config {
 			MaxConcurrent: 16,
 		},
 		Limits: Limits{
-			MaxRepoBytes:       2 << 30,
-			MaxUserBytes:       10 << 30,
-			MaxReposPerUser:    100,
-			MaxPushBytes:       1 << 30,
-			MaxTitanBytes:      64 << 20,
-			MaxTextBytes:       256 << 10,
-			MaxAssetBytes:      64 << 20,
-			MaxRenderBytes:     512 << 10,
-			MaxDiffBytes:       1 << 20,
-			MinFreeBytes:       1 << 30,
-			MaxConns:           1024,
-			MaxConnsPerIP:      32,
-			SSHMaxConns:        256,
-			SSHMaxConnsPerIP:   16,
-			WriteRatePerMinute: 30,
+			MaxRepoBytes:          2 << 30,
+			MaxUserBytes:          10 << 30,
+			MaxReposPerUser:       100,
+			MaxPushBytes:          1 << 30,
+			MaxTitanBytes:         64 << 20,
+			MaxTextBytes:          256 << 10,
+			MaxAssetBytes:         64 << 20,
+			MaxRenderBytes:        512 << 10,
+			MaxDiffBytes:          1 << 20,
+			MinFreeBytes:          1 << 30,
+			MaxConns:              1024,
+			MaxConnsPerIP:         32,
+			SSHMaxConns:           256,
+			SSHMaxConnsPerIP:      16,
+			WriteRatePerMinute:    30,
+			MaxChangeBytes:        64 << 20,
+			MaxOpenChangesPerUser: 10,
+			MaxChangeCommits:      500,
 		},
 		Metrics: Metrics{Listen: ""},
 		Cluster: Cluster{
 			Enabled:      false,
 			SyncInterval: Duration{10 * time.Second},
 		},
+		Health: Health{Interval: Duration{10 * time.Second}},
 	}
 }
 
@@ -288,6 +314,9 @@ func (c *Config) TmpDir() string { return filepath.Join(c.DataDir, "tmp") }
 
 // AssetsDir holds release assets, laid out as <user>/<repo>/<release>/<name>.
 func (c *Config) AssetsDir() string { return filepath.Join(c.DataDir, "assets") }
+
+// DrainFile is the operator marker that pins the node in drained state.
+func (c *Config) DrainFile() string { return filepath.Join(c.DataDir, "drain") }
 
 // HookSocket is the Unix socket used by git hooks to reach the daemon.
 func (c *Config) HookSocket() string { return filepath.Join(c.DataDir, "hook.sock") }

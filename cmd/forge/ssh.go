@@ -42,9 +42,8 @@ func (a sshAuth) Authorize(ctx context.Context, acct *sshd.Account, owner, repo 
 		return "", sshd.ErrNoRepo
 	}
 	if op == sshd.OpWrite {
-		if !acc.CanWrite() {
-			return "", sshd.ErrForbidden
-		}
+		// Readers may open receive-pack to propose changes (refs/for/*);
+		// the pre-receive hook restricts what they can update.
 		if acc.Repo.Archived {
 			return "", fmt.Errorf("%w: repository is archived", sshd.ErrForbidden)
 		}

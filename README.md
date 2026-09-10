@@ -16,10 +16,21 @@ gemini://git.as215520.net/~alice/project/
 git clone git@git.as215520.net:alice/project.git
 ```
 
-## Status
+## What works today
 
-Early development. See [docs/status.md](docs/status.md) for the current milestone,
-what works, what is tested and what is blocked.
+- Browse repositories, trees, files, history, commits and diffs over Gemini.
+- Register with a client certificate; enrol more devices with one-time codes.
+- Clone, fetch and push over SSH with ordinary git; readers propose changes
+  with `git push origin HEAD:refs/for/main` (ADR 0012).
+- Issues, comments, reviews, merges and releases with assets, all written
+  over Titan and confirmed over Gemini INPUT; gemfeeds and Atom for every
+  page worth subscribing to.
+- One binary: `forge serve`, `forge admin`, `forge hook`.
+- Infrastructure as code: OpenTofu for Vultr and Cloudflare, cloud-init,
+  systemd, nftables, BIRD and WireGuard generated from a single address plan.
+
+See [docs/status.md](docs/status.md) for the current milestone, what is
+tested and what is blocked.
 
 ## Layout
 

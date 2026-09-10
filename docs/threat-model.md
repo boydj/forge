@@ -819,3 +819,19 @@ Static / supply chain (CI):
 - Volumetric DDoS beyond aggregate POP capacity is outside our control; anycast and provider filtering are the only levers.
 - Provider (Vultr) has physical access; disk encryption does not protect against a live memory dump. Accepted.
 - Open: whether to forward git pushes from replicas (proxy) after v1, and the exact attestation format; whether to allow partial clone filters; whether user gemtext links should be rendered as links at all or as plain text for new accounts.
+
+
+## Amendments
+
+- 2026-09-10 (ADR 0012): `receive-pack` sessions are accepted from accounts
+  with read access so that they can push `refs/for/<branch>` and
+  `refs/changes/<n>`; the pre-receive hook restricts readers to exactly those
+  refs, one per push, with `max_change_bytes`, `max_open_changes_per_user`
+  and `max_change_commits` limits. `receive.advertisePushOptions=true` with
+  strict option validation (`topic`, `change`, `title` only) and
+  `receive.procReceiveRefs` for `refs/for` and `refs/changes`.
+- 2026-09-10 (T-19/T-21 deviation): Titan writes are authorised by the client
+  certificate alone; no single-use token. A Titan upload is an explicit
+  client action, never a link click, and the affected clients drop URL
+  parameters from links anyway. State changes reachable over plain Gemini
+  require an INPUT-typed confirmation. Revisit if abuse is observed.

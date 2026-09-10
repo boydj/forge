@@ -38,12 +38,31 @@ type Request struct {
 	Repo        string   `json:"repo"` // owner/name
 	Updates     []Update `json:"updates"`
 	PushedBytes int64    `json:"pushed_bytes"`
+	// PushOptions are the client's `-o` values (proc-receive only).
+	PushOptions []string `json:"push_options,omitempty"`
 }
 
 // Response is returned by the daemon.
 type Response struct {
 	OK       bool     `json:"ok"`
 	Messages []string `json:"messages,omitempty"`
+	// Results carries one entry per Update for proc-receive; an update
+	// without a result is reported to git as rejected.
+	Results []Result `json:"results,omitempty"`
+}
+
+// Result is the daemon's verdict on one proc-receive command.
+type Result struct {
+	// Ref is the command's ref as pushed (refs/for/main, refs/changes/12).
+	Ref string `json:"ref"`
+	OK  bool   `json:"ok"`
+	// Reason explains a rejection (single line).
+	Reason string `json:"reason,omitempty"`
+	// RefName, OldOID and NewOID describe the ref actually updated by the
+	// daemon (`option refname/old-oid/new-oid`); empty values are omitted.
+	RefName string `json:"refname,omitempty"`
+	OldOID  string `json:"old_oid,omitempty"`
+	NewOID  string `json:"new_oid,omitempty"`
 }
 
 // Env variable names shared with the SSH server.
@@ -59,18 +78,22 @@ var ErrDenied = errors.New("push rejected")
 
 // Run executes the hook client: it reads ref updates from stdin, asks the
 // daemon, prints messages to stderr and returns ErrDenied on rejection.
-func Run(hook string, stdin io.Reader, stderr io.Writer) error {
-	if hook == "update" {
+// For proc-receive, stdin and stdout carry git's pkt-line conversation
+// (see procreceive.go); the other hooks do not write to stdout.
+func Run(hook string, stdin io.Reader, stdout, stderr io.Writer) error {
+	switch hook {
+	case "update":
 		// pre-receive makes all decisions; update is a no-op.
 		return nil
+	case "proc-receive":
+		return runProcReceive(stdin, stdout, stderr)
 	}
 	sock := os.Getenv(EnvSocket)
 	if sock == "" {
 		fmt.Fprintln(stderr, "forge: hook invoked outside the forge (no socket); refusing")
 		return ErrDenied
 	}
-	req := Request{Hook: hook, Account: os.Getenv(EnvAccount), Repo: os.Getenv(EnvRepo)}
-	req.AccountID, _ = strconv.ParseInt(os.Getenv(EnvAccountID), 10, 64)
+	req := newRequest(hook)
 	sc := bufio.NewScanner(stdin)
 	for sc.Scan() {
 		f := strings.Fields(sc.Text())
@@ -94,6 +117,13 @@ func Run(hook string, stdin io.Reader, stderr io.Writer) error {
 		return ErrDenied
 	}
 	return nil
+}
+
+// newRequest builds a request with the identity the SSH server exported.
+func newRequest(hook string) Request {
+	req := Request{Hook: hook, Account: os.Getenv(EnvAccount), Repo: os.Getenv(EnvRepo)}
+	req.AccountID, _ = strconv.ParseInt(os.Getenv(EnvAccountID), 10, 64)
+	return req
 }
 
 func call(sock string, req *Request) (*Response, error) {

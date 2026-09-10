@@ -147,6 +147,10 @@ func (h *Handler) accountProfile(req *request, u *store.User) {
 
 func (h *Handler) accountKeys(req *request, u *store.User, rest []string) {
 	if len(rest) == 2 && rest[0] == "remove" {
+		if !strings.EqualFold(strings.TrimSpace(req.Query()), "remove") {
+			_ = gemini.Input(req.w, "Type \"remove\" to delete this SSH key")
+			return
+		}
 		if err := h.F.RemoveSSHKey(req.ctx, u, "SHA256:"+rest[1]); err != nil {
 			req.fail(err)
 			return
@@ -242,6 +246,10 @@ func (h *Handler) accountCerts(req *request, u *store.User, rest []string) {
 					_ = gemini.BadRequest(req.w, "cannot revoke the certificate in use; do it from another device")
 					return
 				}
+				if !strings.EqualFold(strings.TrimSpace(req.Query()), "revoke") {
+					_ = gemini.Input(req.w, "Type \"revoke\" to revoke this certificate")
+					return
+				}
 				if err := h.F.Store.RevokeCertificate(req.ctx, c.ID); err != nil {
 					req.fail(err)
 					return
@@ -285,6 +293,10 @@ func (h *Handler) accountCerts(req *request, u *store.User, rest []string) {
 func (h *Handler) serveTitan(req *request) {
 	u := req.requireUser()
 	if u == nil {
+		return
+	}
+	if !req.Titan.Edit && !h.limiter.allow(u.ID, h.F.Config.Limits.WriteRatePerMinute) {
+		_ = req.w.Header(gemini.StatusSlowDown, "too many writes; wait a minute and retry")
 		return
 	}
 	segs := req.segs
@@ -342,6 +354,9 @@ func (h *Handler) titanRepo(req *request, u *store.User, owner, name string, res
 	rc := &repoCtx{acc: acc, base: "/~" + owner + "/" + name}
 	if len(rest) == 0 {
 		_ = gemini.NotFound(req.w)
+		return
+	}
+	if h.forwardIfRemote(req, acc.Repo) {
 		return
 	}
 	switch rest[0] {

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -160,7 +161,11 @@ func (s *session) exec(line string) int {
 		case errors.Is(err, ErrNoRepo):
 			s.stderr(fmt.Sprintf("forge: repository '%s' not found", cmd.Path()))
 		case errors.Is(err, ErrForbidden):
-			s.stderr(fmt.Sprintf("forge: forbidden: write access to '%s' denied", cmd.Path()))
+			msg := fmt.Sprintf("forge: forbidden: write access to '%s' denied", cmd.Path())
+			if detail := strings.TrimPrefix(err.Error(), ErrForbidden.Error()); detail != "" && detail != err.Error() {
+				msg += strings.TrimSuffix(detail, "\n")
+			}
+			s.stderr(msg)
 		default:
 			log.Error("authorizer error", "err", err)
 			s.stderr("forge: internal error")

@@ -154,7 +154,7 @@ starts withdrawn: a freshly built node announces nothing until health says so.
 ### 3.2 Health-controlled announcement with hysteresis
 
 The forge health worker (`internal/health`) evaluates local checks every
-10 s: Gemini `20` on `/healthz` via the anycast address, SSH banner, WireGuard
+10 s: Gemini `20` on `/status` via the anycast address, SSH banner, WireGuard
 peer reachability, SQLite integrity flag, and a "leader manifest not stale"
 check. The state machine:
 

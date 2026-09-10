@@ -42,14 +42,17 @@ func (f *Forge) HandleHook(ctx context.Context, req *hooks.Request) *hooks.Respo
 	case "post-receive":
 		f.postReceive(ctx, req, r, u)
 		return &hooks.Response{OK: true}
+	case "proc-receive":
+		return f.procReceive(ctx, req, r, u, role)
 	default:
 		return deny("unknown hook")
 	}
 }
 
 func (f *Forge) preReceive(ctx context.Context, req *hooks.Request, r *store.Repo, u *store.User, role store.Role, deny func(string) *hooks.Response) *hooks.Response {
-	if role != store.RoleWrite && role != store.RoleAdmin {
-		return deny("you do not have write access to " + req.Repo)
+	writer := role == store.RoleWrite || role == store.RoleAdmin
+	if !writer && role != store.RoleRead {
+		return deny("you do not have access to " + req.Repo)
 	}
 	if r.Archived {
 		return deny("repository is archived; unarchive it in settings to push")
@@ -69,11 +72,23 @@ func (f *Forge) preReceive(ctx context.Context, req *hooks.Request, r *store.Rep
 			return deny("owner's storage quota would be exceeded")
 		}
 	}
+	if !writer && req.PushedBytes > f.Config.Limits.MaxChangeBytes {
+		return deny(fmt.Sprintf("a proposed change may not exceed %d bytes per push", f.Config.Limits.MaxChangeBytes))
+	}
+	changeCmds := 0
 	for _, up := range req.Updates {
 		switch {
+		case strings.HasPrefix(up.Ref, "refs/for/"), isChangeRef(up.Ref):
+			changeCmds++
+			if up.New == zeroID {
+				return deny("cannot delete " + up.Ref)
+			}
 		case strings.HasPrefix(up.Ref, "refs/heads/"), strings.HasPrefix(up.Ref, "refs/tags/"), strings.HasPrefix(up.Ref, "refs/notes/"):
+			if !writer {
+				return deny("you can only propose changes here: git push origin HEAD:refs/for/" + r.DefaultBranch)
+			}
 		default:
-			return deny("ref " + up.Ref + " is not allowed; push branches, tags or notes")
+			return deny("ref " + up.Ref + " is not allowed; push branches, tags, notes, refs/for/<branch> or refs/changes/<n>")
 		}
 		if up.New == zeroID && up.Ref == "refs/heads/"+r.DefaultBranch {
 			return deny("refusing to delete the default branch " + r.DefaultBranch)
@@ -82,7 +97,30 @@ func (f *Forge) preReceive(ctx context.Context, req *hooks.Request, r *store.Rep
 			return deny("invalid ref name")
 		}
 	}
+	if changeCmds > 1 {
+		return deny("push one change (refs/for/<branch> or refs/changes/<n>) at a time")
+	}
+	if changeCmds == 1 && !writer {
+		n, err := f.Store.CountOpenChangesByAuthor(ctx, r.ID, u.ID)
+		if err == nil && n >= f.Config.Limits.MaxOpenChangesPerUser {
+			return deny(fmt.Sprintf("you already have %d open changes in %s; close or finish some first", n, req.Repo))
+		}
+	}
 	return &hooks.Response{OK: true}
+}
+
+// isChangeRef matches refs/changes/<n> exactly (no sub-path).
+func isChangeRef(ref string) bool {
+	rest, ok := strings.CutPrefix(ref, "refs/changes/")
+	if !ok || rest == "" || strings.Contains(rest, "/") {
+		return false
+	}
+	for _, c := range rest {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *Forge) postReceive(ctx context.Context, req *hooks.Request, r *store.Repo, u *store.User) {
@@ -129,6 +167,7 @@ func (f *Forge) postReceive(ctx context.Context, req *hooks.Request, r *store.Re
 				path = base + "/refs"
 			}
 		default:
+			// refs/changes/* updates were recorded by proc-receive.
 			continue
 		}
 		b, _ := json.Marshal(payload)

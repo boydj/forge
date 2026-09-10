@@ -15,8 +15,8 @@ func runHook(args []string) error {
 		return errors.New("hook name required")
 	}
 	switch args[0] {
-	case "pre-receive", "update", "post-receive":
-		if err := hooks.Run(args[0], os.Stdin, os.Stderr); err != nil {
+	case "pre-receive", "update", "post-receive", "proc-receive":
+		if err := hooks.Run(args[0], os.Stdin, os.Stdout, os.Stderr); err != nil {
 			os.Exit(1)
 		}
 		return nil

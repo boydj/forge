@@ -4,6 +4,6 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p var/dev
 if [ ! -f var/dev/forge.toml ]; then
-  ./bin/forge admin init --data var/dev --hostname localhost --write-config var/dev/forge.toml
+  ./bin/forge admin init --data var/dev --hostname localhost --gemini-listen :1965 --ssh-listen :2222 --write-config var/dev/forge.toml
 fi
 exec ./bin/forge serve --config var/dev/forge.toml "$@"

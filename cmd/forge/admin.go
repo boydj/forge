@@ -13,7 +13,9 @@ import (
 
 	"as215520.net/forge/internal/config"
 	"as215520.net/forge/internal/forge"
+	"as215520.net/forge/internal/repl"
 	"as215520.net/forge/internal/store"
+	"as215520.net/forge/internal/version"
 )
 
 func adminUsage() {
@@ -26,8 +28,11 @@ func adminUsage() {
   cert list USER | cert revoke SPKI | cert enrol-code USER
   repo list | repo create OWNER/NAME [--private] [--description TEXT]
   repo delete OWNER/NAME | repo restore OWNER/NAME | repo check OWNER/NAME | repo size OWNER/NAME
-  maintenance
-  backup --out FILE
+  repo resync OWNER/NAME | repo move-leader OWNER/NAME NODE
+  pop status | pop drain | pop undrain
+  maintenance [--check]
+  backup --out FILE.tar.gz | FILE.db
+  restore --in FILE.tar.gz      (daemon must be stopped)
 `)
 }
 
@@ -76,9 +81,13 @@ func runAdmin(args []string) error {
 	case "repo":
 		return adminRepo(ctx, app, rest[1:])
 	case "maintenance":
-		return adminMaintenance(ctx, app)
+		return adminMaintenance(ctx, app, rest[1:])
 	case "backup":
 		return adminBackup(ctx, app, rest[1:])
+	case "restore":
+		return adminRestore(ctx, app, rest[1:])
+	case "pop":
+		return adminPop(ctx, app, rest[1:])
 	default:
 		adminUsage()
 		return fmt.Errorf("unknown command %q", rest[0])
@@ -399,6 +408,29 @@ func adminRepo(ctx context.Context, app *forge.Forge, args []string) error {
 		}
 		fmt.Printf("created %s/%s at %s\n", r.Owner, r.Name, app.RepoPath(r.Owner, r.Name))
 		return nil
+	case "resync", "move-leader":
+		if len(args) < 2 {
+			return fmt.Errorf("repo %s OWNER/NAME [NODE]", args[0])
+		}
+		owner, name, err := splitRepo(args[1])
+		if err != nil {
+			return err
+		}
+		r, err := app.Store.RepoByPath(ctx, owner, name)
+		if err != nil {
+			return err
+		}
+		node, err := newReplNode(app)
+		if err != nil {
+			return err
+		}
+		if args[0] == "resync" {
+			return node.Resync(ctx, r.ID)
+		}
+		if len(args) != 3 {
+			return errors.New("repo move-leader OWNER/NAME NODE")
+		}
+		return node.MoveLeader(ctx, r.ID, args[2])
 	case "delete", "restore", "check", "size":
 		if len(args) != 2 {
 			return fmt.Errorf("repo %s OWNER/NAME", args[0])
@@ -456,45 +488,110 @@ func adminRepo(ctx context.Context, app *forge.Forge, args []string) error {
 	return fmt.Errorf("repo: unknown subcommand %q", args[0])
 }
 
-func adminMaintenance(ctx context.Context, app *forge.Forge) error {
-	n, err := app.PurgeDeleted(ctx)
+func adminMaintenance(ctx context.Context, app *forge.Forge, args []string) error {
+	fs := flag.NewFlagSet("maintenance", flag.ContinueOnError)
+	check := fs.Bool("check", false, "also run git fsck on every repository")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	stats, err := app.Maintain(ctx, *check)
+	for k, v := range stats {
+		fmt.Printf("%s: %d\n", k, v)
+	}
 	if err != nil {
 		return err
 	}
-	fmt.Printf("purged %d deleted repositories\n", n)
-	if err := app.Store.PurgeTokens(ctx); err != nil {
-		return err
+	if stats["corrupt"] > 0 {
+		return fmt.Errorf("%d repositories failed fsck", stats["corrupt"])
 	}
-	repos, err := app.Store.AllRepos(ctx)
-	if err != nil {
-		return err
-	}
-	for _, r := range repos {
-		if _, err := app.RefreshSize(ctx, r); err != nil {
-			fmt.Fprintf(os.Stderr, "size %s/%s: %v\n", r.Owner, r.Name, err)
-		}
-	}
-	fmt.Printf("refreshed %d repository sizes\n", len(repos))
 	return nil
 }
 
 func adminBackup(ctx context.Context, app *forge.Forge, args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
-	out := fs.String("out", "", "output database snapshot path (required)")
+	out := fs.String("out", "", "output path: FILE.tar.gz (full) or FILE.db (database only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *out == "" {
 		return errors.New("--out is required")
 	}
-	if err := os.Remove(*out); err != nil && !os.IsNotExist(err) {
+	if err := app.Backup(ctx, *out); err != nil {
 		return err
 	}
-	if err := app.Store.Backup(ctx, *out); err != nil {
-		return err
-	}
-	fmt.Println("database snapshot written to", *out)
+	fmt.Println("backup written to", *out)
 	return nil
+}
+
+func adminRestore(ctx context.Context, app *forge.Forge, args []string) error {
+	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
+	in := fs.String("in", "", "backup archive (FILE.tar.gz)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *in == "" {
+		return errors.New("--in is required")
+	}
+	if _, err := os.Stat(app.Config.HookSocket()); err == nil {
+		return errors.New("hook socket exists: stop the daemon before restoring")
+	}
+	if err := app.Restore(ctx, *in); err != nil {
+		return err
+	}
+	fmt.Println("restored from", *in)
+	return nil
+}
+
+func newReplNode(app *forge.Forge) (*repl.Node, error) {
+	c := app.Config.Cluster
+	if !c.Enabled {
+		return nil, errors.New("cluster mode is not enabled in the configuration")
+	}
+	return repl.New(repl.Options{
+		Name: app.Config.Node, Listen: c.ControlListen, Peers: c.Peers, SecretFile: c.SecretFile,
+		MetadataLeader: c.MetadataLeader, SyncInterval: c.SyncInterval.Duration, ReposDir: app.Config.ReposDir(),
+		Version: version.Version, Store: app.Store, Git: app.Git, Log: app.Log,
+	})
+}
+
+func adminPop(ctx context.Context, app *forge.Forge, args []string) error {
+	if len(args) == 0 {
+		return errors.New("pop: subcommand required (status)")
+	}
+	switch args[0] {
+	case "drain":
+		if err := os.WriteFile(app.Config.DrainFile(), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o640); err != nil {
+			return err
+		}
+		fmt.Println("drain requested; the daemon prepends/withdraws within a few seconds and stays drained until 'pop undrain'")
+		return nil
+	case "undrain":
+		if err := os.Remove(app.Config.DrainFile()); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		fmt.Println("drain released; the daemon re-announces once checks pass")
+		return nil
+	case "status":
+		fmt.Printf("node: %s\n", app.Config.Node)
+		if _, err := os.Stat(app.Config.DrainFile()); err == nil {
+			fmt.Println("drain: pinned by operator (pop undrain to release)")
+		}
+		if !app.Config.Cluster.Enabled {
+			fmt.Println("cluster: disabled (single node)")
+			return nil
+		}
+		st, err := repl.Status(ctx, app.Store)
+		if err != nil {
+			return err
+		}
+		tw := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
+		fmt.Fprintln(tw, "REPO\tLEADER\tNODE\tSTATUS\tLAST SYNC\tDETAIL")
+		for _, s := range st {
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", s.Repo, s.LeaderNode, s.Node, s.Status, s.LastSyncedAt.Format(time.RFC3339), s.Detail)
+		}
+		return tw.Flush()
+	}
+	return fmt.Errorf("pop: unknown subcommand %q", args[0])
 }
 
 var _ = store.ErrNotFound

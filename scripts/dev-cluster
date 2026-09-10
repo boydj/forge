@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Local multi-node simulation: N forge nodes on localhost with distinct
+# ports, cluster mode enabled, a shared cluster secret and a full peer mesh.
+# Usage: scripts/dev-cluster up [N] | down | status | logs <node>
+# Nodes are named n1..nN under var/cluster/<node>; ports:
+#   gemini 1965+i*10, ssh 2200+i*10, control 9800+i*10, metrics 9900+i*10
+set -euo pipefail
+cd "$(dirname "$0")/.."
+ROOT=var/cluster
+BIN=./bin/forge
+cmd=${1:-up}
+case "$cmd" in
+  up)
+    N=${2:-2}
+    [ -x "$BIN" ] || make build
+    mkdir -p "$ROOT"
+    if [ ! -f "$ROOT/cluster.secret" ]; then
+      head -c 32 /dev/urandom | base64 | tr -d '\n' > "$ROOT/cluster.secret"
+      chmod 600 "$ROOT/cluster.secret"
+    fi
+    for i in $(seq 1 "$N"); do
+      node="n$i"; dir="$ROOT/$node"
+      if [ ! -f "$dir/forge.toml" ]; then
+        $BIN admin init --data "$dir" --hostname localhost --node "$node" \
+          --gemini-listen "127.0.0.1:$((1965 + i * 10))" --ssh-listen "127.0.0.1:$((2200 + i * 10))" \
+          --write-config "$dir/forge.toml" >/dev/null
+        python3 - "$dir/forge.toml" "$i" "$N" "$ROOT/cluster.secret" <<'PY'
+import sys, re
+path, i, n, secret = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+s = open(path).read()
+s = re.sub(r'\[metrics\][^\[]*', '', s, flags=re.S)
+s = re.sub(r'\[cluster\].*', '', s, flags=re.S)
+peers = "".join(f'    n{j} = "127.0.0.1:{9800 + j * 10}"\n' for j in range(1, n + 1) if j != i)
+s += f'''
+[metrics]
+  listen = "127.0.0.1:{9900 + i * 10}"
+
+[cluster]
+  enabled = true
+  control_listen = "127.0.0.1:{9800 + i * 10}"
+  secret_file = "{secret}"
+  sync_interval = "2s"
+  [cluster.peers]
+{peers}'''
+open(path, 'w').write(s)
+PY
+      fi
+      if [ -f "$dir/pid" ] && kill -0 "$(cat "$dir/pid")" 2>/dev/null; then
+        echo "$node already running"; continue
+      fi
+      nohup $BIN serve --config "$dir/forge.toml" > "$dir/serve.log" 2>&1 &
+      echo $! > "$dir/pid"
+      echo "$node: gemini://localhost:$((1965 + i * 10))/ ssh port $((2200 + i * 10)) control 127.0.0.1:$((9800 + i * 10))"
+    done
+    ;;
+  down)
+    for p in "$ROOT"/n*/pid; do
+      [ -f "$p" ] || continue
+      kill "$(cat "$p")" 2>/dev/null || true; rm -f "$p"
+    done
+    echo "stopped"
+    ;;
+  status)
+    for d in "$ROOT"/n*; do
+      [ -d "$d" ] || continue
+      node=$(basename "$d")
+      if [ -f "$d/pid" ] && kill -0 "$(cat "$d/pid")" 2>/dev/null; then st=running; else st=stopped; fi
+      echo "$node $st"
+      $BIN admin --config "$d/forge.toml" status 2>/dev/null | sed 's/^/  /' || true
+    done
+    ;;
+  logs)
+    tail -n 50 "$ROOT/${2:-n1}/serve.log"
+    ;;
+  clean)
+    "$0" down; rm -rf "$ROOT"
+    ;;
+  *) echo "usage: $0 up [N] | down | status | logs <node> | clean"; exit 2;;
+esac

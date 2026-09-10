@@ -2,13 +2,13 @@
 # forge-backup: consistent backup of a forge node's data directory.
 #
 # Interface (the CLI does not exist yet; this script is written against it):
-#   forge admin backup --config /etc/forge/forge.toml --out <file.tar.zst>
+#   forge admin backup --config /etc/forge/forge.toml --out <file.tar.gz>
 #     writes a zstd-compressed tar containing a consistent SQLite snapshot
 #     (VACUUM INTO / backup API), all bare repositories (with refs taken after
 #     the database snapshot so the DB never references missing objects),
 #     release assets and the TLS/SSH identities. Exit 0 on success.
 #
-# Output: /var/backups/forge/<UTC date-time>.tar.zst.age, encrypted with the
+# Output: /var/backups/forge/<UTC date-time>.tar.gz.age, encrypted with the
 # backup_encryption_key recipient from /etc/forge/secrets/backup.recipient
 # (an age public key; the private half stays with the operator, never on the
 # node). Retention: keep the newest $KEEP files. Off-site copy: set
@@ -34,8 +34,8 @@ case "$recipient" in age1*) ;; *) die "recipient in $RECIPIENT_FILE is not an ag
 install -d -m 0700 "$OUT_DIR"
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 tmp=$(mktemp -d "$OUT_DIR/.tmp.XXXXXX"); trap 'rm -rf "$tmp"' EXIT
-plain="$tmp/$stamp.tar.zst"
-final="$OUT_DIR/$stamp.tar.zst.age"
+plain="$tmp/$stamp.tar.gz"
+final="$OUT_DIR/$stamp.tar.gz.age"
 
 log "creating $plain"
 # Run the export as the forge user so the data directory permissions stay intact.
@@ -52,7 +52,7 @@ chmod 0600 "$final"
 log "wrote $final ($(du -h "$final" | cut -f1))"
 
 # Retention: newest $KEEP encrypted archives.
-ls -1t "$OUT_DIR"/*.tar.zst.age 2>/dev/null | tail -n +"$((KEEP + 1))" | while read -r old; do
+ls -1t "$OUT_DIR"/*.tar.gz.age 2>/dev/null | tail -n +"$((KEEP + 1))" | while read -r old; do
   log "pruning $old"; rm -f -- "$old"
 done
 

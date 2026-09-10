@@ -137,8 +137,10 @@ func newGitClient(t *testing.T, n *node) *gitClient {
 	if out, err := exec.Command("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "test", "-f", key).CombinedOutput(); err != nil {
 		t.Skipf("ssh-keygen: %v %s", err, out)
 	}
-	sshCmd := fmt.Sprintf("ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=%s -o BatchMode=yes -p %d",
-		key, filepath.Join(dir, "known_hosts"), n.sshPort)
+	// No -p here: ssh keeps the first -p it sees, which would override the
+	// port carried by ssh:// URLs (tests talk to several nodes).
+	sshCmd := fmt.Sprintf("ssh -i %s -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=%s -o BatchMode=yes",
+		key, filepath.Join(dir, "known_hosts"))
 	return &gitClient{t: t, key: key, env: append(os.Environ(),
 		"GIT_SSH_COMMAND="+sshCmd,
 		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@example.org",
@@ -225,8 +227,8 @@ func TestFirstAcceptance(t *testing.T) {
 	bob.must(bwork, "add", "x")
 	bob.must(bwork, "commit", "-qm", "bob")
 	out, err := bob.run(bwork, "push", "-q")
-	if err == nil || !strings.Contains(out, "forbidden") {
-		t.Fatalf("bob push should be forbidden: %v\n%s", err, out)
+	if err == nil || !strings.Contains(out, "you can only propose changes") {
+		t.Fatalf("bob push should be refused: %v\n%s", err, out)
 	}
 
 	// Deleting the default branch is refused by the pre-receive hook.
@@ -356,4 +358,113 @@ func (n *node) request(scheme, path string, cert *tls.Certificate, body string) 
 	fmt.Sscanf(header, "%d", &status)
 	rest, _ := io.ReadAll(br)
 	return status, strings.TrimSpace(header[3:]), string(rest)
+}
+
+// TestChangeWorkflow: propose a change by pushing to refs/for/main as a
+// reader, review and merge it over Titan, and verify the branch advanced.
+func TestChangeWorkflow(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("ssh client not installed")
+	}
+	n := startNode(t)
+	n.admin("user", "create", "alice")
+	n.admin("user", "create", "bob")
+	n.admin("repo", "create", "alice/proj")
+	alice := newGitClient(t, n)
+	n.admin("key", "add", "alice", alice.key+".pub")
+	bob := newGitClient(t, n)
+	n.admin("key", "add", "bob", bob.key+".pub")
+	url := fmt.Sprintf("ssh://git@127.0.0.1:%d/alice/proj.git", n.sshPort)
+
+	// Alice seeds main.
+	work := filepath.Join(t.TempDir(), "alice")
+	alice.must("", "clone", "-q", url, work)
+	_ = os.WriteFile(filepath.Join(work, "a.txt"), []byte("one\n"), 0o644)
+	alice.must(work, "add", ".")
+	alice.must(work, "commit", "-qm", "seed")
+	alice.must(work, "push", "-q", "-u", "origin", "main")
+
+	// Bob (reader) cannot push to main but can propose a change.
+	bwork := filepath.Join(t.TempDir(), "bob")
+	bob.must("", "clone", "-q", url, bwork)
+	_ = os.WriteFile(filepath.Join(bwork, "b.txt"), []byte("two\n"), 0o644)
+	bob.must(bwork, "add", ".")
+	bob.must(bwork, "commit", "-qm", "Add b.txt\n\nBecause we need it.")
+	if out, err := bob.run(bwork, "push", "origin", "HEAD:main"); err == nil || !strings.Contains(out, "only propose changes") {
+		t.Fatalf("bob push to main: %v\n%s", err, out)
+	}
+	out := bob.must(bwork, "push", "origin", "HEAD:refs/for/main")
+	if !strings.Contains(out, "created change 1 (v1, 1 commit) targeting main") || !strings.Contains(out, "refs/changes/1/v1") {
+		t.Fatalf("propose output:\n%s", out)
+	}
+	status, _, body := n.request("gemini", "/~alice/proj/changes/1", nil, "")
+	if status != 20 || !strings.Contains(body, "# #1 Add b.txt") || !strings.Contains(body, "bob -> main, v1, open") || !strings.Contains(body, "Because we need it.") {
+		t.Fatalf("change page: %d\n%s", status, body)
+	}
+	status, _, body = n.request("gemini", "/~alice/proj/changes/1/diff", nil, "")
+	if status != 20 || !strings.Contains(body, "+two") {
+		t.Fatalf("change diff: %d\n%s", status, body)
+	}
+	// Second version after amending.
+	_ = os.WriteFile(filepath.Join(bwork, "b.txt"), []byte("two\nthree\n"), 0o644)
+	bob.must(bwork, "commit", "-qa", "--amend", "--no-edit")
+	out = bob.must(bwork, "push", "origin", "HEAD:refs/changes/1")
+	if !strings.Contains(out, "updated change 1 (v2") {
+		t.Fatalf("update output:\n%s", out)
+	}
+	status, _, body = n.request("gemini", "/~alice/proj/changes/1/interdiff/1/2", nil, "")
+	if status != 20 || !strings.Contains(body, "```range-diff") {
+		t.Fatalf("interdiff: %d\n%s", status, body)
+	}
+	status, _, body = n.request("gemini", "/~alice/proj/changes/1/patch", nil, "")
+	if status != 20 || !strings.HasPrefix(body, "From ") {
+		t.Fatalf("patch: %d\n%s", status, body)
+	}
+
+	// Alice reviews with an anchor and approves, then merges over Titan.
+	aliceCert := registeredCert(t, n, "alice")
+	review := "approve\n\nLooks fine.\n\n@ b.txt:2\n> three\nGood addition.\n"
+	status, meta, _ := n.request("titan", fmt.Sprintf("/~alice/proj/changes/1/review;size=%d;mime=text/plain", len(review)), &aliceCert, review)
+	if status != 30 {
+		t.Fatalf("review: %d %s", status, meta)
+	}
+	status, _, body = n.request("gemini", "/~alice/proj/changes/1", nil, "")
+	if !strings.Contains(body, "v2, approved") || !strings.Contains(body, "=> /~alice/proj/changes/1/v2/diff/b.txt b.txt:2 (v2)") || !strings.Contains(body, "> three") {
+		t.Fatalf("after review:\n%s", body)
+	}
+	status, meta, _ = n.request("titan", "/~alice/proj/changes/1/merge;size=0", &aliceCert, "")
+	if status != 30 || !strings.HasPrefix(meta, "/~alice/proj/commit/") {
+		t.Fatalf("merge: %d %s", status, meta)
+	}
+	status, _, body = n.request("gemini", "/~alice/proj/changes/1", nil, "")
+	if !strings.Contains(body, "v2, merged") {
+		t.Fatalf("after merge:\n%s", body)
+	}
+	alice.must(work, "pull", "-q")
+	if data, _ := os.ReadFile(filepath.Join(work, "b.txt")); string(data) != "two\nthree\n" {
+		t.Fatalf("main after merge: %q", data)
+	}
+	// Pushing to a merged change is refused.
+	if out, err := bob.run(bwork, "push", "origin", "HEAD:refs/changes/1"); err == nil || !strings.Contains(out, "is merged") {
+		t.Fatalf("push to merged change: %v\n%s", err, out)
+	}
+	status, _, body = n.request("gemini", "/~alice/proj/changes/feed", nil, "")
+	if status != 20 || !strings.Contains(body, "bob proposed change #1") || !strings.Contains(body, "alice merged change #1") {
+		t.Fatalf("changes feed:\n%s", body)
+	}
+}
+
+// registeredCert creates a client certificate and binds it to an existing
+// user through the admin enrolment code flow.
+func registeredCert(t *testing.T, n *node, user string) tls.Certificate {
+	t.Helper()
+	cert := newClientCert(t)
+	out := n.admin("cert", "enrol-code", user)
+	f := strings.Fields(out)
+	code := f[len(f)-1]
+	status, meta, _ := n.request("gemini", "/account/enrol?"+code, &cert, "")
+	if status != 30 {
+		t.Fatalf("enrol %s: %d %s", user, status, meta)
+	}
+	return cert
 }

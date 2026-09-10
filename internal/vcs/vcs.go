@@ -133,7 +133,22 @@ var (
 	ErrIsDir      = errors.New("vcs: path is a directory")
 	ErrNotDir     = errors.New("vcs: path is not a directory")
 	ErrUnexpected = errors.New("vcs: unexpected tool output")
+	// ErrConflict is returned by UpdateRefs when a compare-and-swap fails
+	// (the ref moved, already exists, or is locked by another writer).
+	ErrConflict = errors.New("vcs: ref update conflict")
 )
+
+// RefUpdate is one entry of an atomic ref transaction (see
+// Repository.UpdateRefs). Ref is a full ref name ("refs/heads/main").
+type RefUpdate struct {
+	Ref string
+	// New is the revision to point Ref at; "" deletes the ref.
+	New RevisionID
+	// Old is the expected current value: "" means the ref must not exist
+	// (for a delete: unconditional); otherwise the update is a
+	// compare-and-swap against Old.
+	Old RevisionID
+}
 
 // Repository is a read view of one repository.
 type Repository interface {
@@ -163,6 +178,45 @@ type Repository interface {
 	Size(ctx context.Context) (int64, error)
 	// Check verifies integrity; it returns an error describing corruption.
 	Check(ctx context.Context) error
+
+	// MergeBase returns the best common ancestor of a and b, or ErrNotFound
+	// when the histories are unrelated.
+	MergeBase(ctx context.Context, a, b RevisionID) (RevisionID, error)
+	// IsAncestor reports whether a is an ancestor of (or equal to) b.
+	IsAncestor(ctx context.Context, a, b RevisionID) (bool, error)
+	// CountCommits counts the revisions in base..head.
+	CountCommits(ctx context.Context, base, head RevisionID) (int, error)
+	// ListCommits lists base..head oldest first, at most limit (<=0: 500).
+	// When the range holds more than limit revisions the newest limit are
+	// returned (git applies -n before --reverse); check CountCommits first.
+	ListCommits(ctx context.Context, base, head RevisionID, limit int) ([]*Revision, error)
+	// RangeDiff renders `git range-diff base1..head1 base2..head2` without
+	// colour, bounded to maxBytes (<=0: 1 MiB); truncated reports whether
+	// output was cut.
+	RangeDiff(ctx context.Context, base1, head1, base2, head2 RevisionID, maxBytes int64) (text string, truncated bool, err error)
+	// FormatPatch streams `git format-patch --stdout base..head` (an mbox)
+	// to w, stopping after maxBytes (<=0: 64 MiB) and returning ErrTooLarge
+	// when the output was cut.
+	FormatPatch(ctx context.Context, base, head RevisionID, maxBytes int64, w io.Writer) error
+	// DiffPath is DiffRange restricted to one path ("" means no filter).
+	DiffPath(ctx context.Context, base, head RevisionID, path string, maxBytes int64) (*Diff, error)
+	// MergeTree merges theirs into ours without a working tree
+	// (`git merge-tree --write-tree`, git >= 2.38) and returns the resulting
+	// tree id. When the merge is conflicted err is nil and conflicts lists
+	// the conflicted paths; the tree then contains conflict markers.
+	MergeTree(ctx context.Context, ours, theirs RevisionID) (tree string, conflicts []string, err error)
+	// CommitTree creates a commit object for tree with the given parents,
+	// identities and message and returns its id.
+	CommitTree(ctx context.Context, tree string, parents []RevisionID, author, committer Signature, message string) (RevisionID, error)
+	// UpdateRefs applies all updates atomically (all or nothing). It returns
+	// ErrConflict when any compare-and-swap fails. reason is recorded in the
+	// reflog.
+	UpdateRefs(ctx context.Context, updates []RefUpdate, reason string) error
+	// RefsMatching lists refs whose full name is prefix or lies under it
+	// (e.g. "refs/changes/12/"). Name is the full ref name.
+	RefsMatching(ctx context.Context, prefix string) ([]Ref, error)
+	// ObjectType returns "commit", "tag", "tree" or "blob", or ErrNotFound.
+	ObjectType(ctx context.Context, id RevisionID) (string, error)
 }
 
 // Backend creates and opens repositories.
