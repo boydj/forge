@@ -1,0 +1,54 @@
+# Desired RPKI state for AS215520. Read by scripts/netcheck (together with
+# infra/network/address-plan.yaml) and compared with RIPEstat rpki-validation.
+#
+# Rule: maxLength == prefix length for every ROA. Both prefixes are announced
+# whole from every POP (anycast), so a longer maxLength would only authorise
+# more-specific hijacks (RFC 9319).
+version: 1
+asn: 215520
+expected_validation: valid          # what RIPEstat must report for (prefix, AS215520)
+
+roas:
+  - prefix: "2a0f:85c1:368::/48"
+    max_length: 48
+    asn: 215520
+    ca: ripe-hosted                 # RIPE NCC hosted RPKI, certificate of the sponsoring LIR (Inferno)
+    status: exists                  # valid since 2024; verified 2026-09-10 (routinator + rpki-client)
+    who: "Inferno Communications (LIR) if it ever needs changing; operator cannot edit it"
+    ripe_dashboard:
+      note: >
+        The /48 is a PA sub-assignment inside Inferno's 2a0f:85c0::/29. RIPE hosted
+        RPKI issues ROAs from the LIR's resource certificate, so the ROA lives in
+        Inferno's LIR Portal (https://my.ripe.net/#/rpki), not in an End User account.
+        Nothing to do today; keep maxLength 48. If the ROA ever needs a change, e-mail
+        noc@inferno.net.uk with "RPKI ROA for 2a0f:85c1:368::/48: origin AS215520,
+        maxLength 48". Should the /48 ever become PI (network-architecture.md section 6,
+        option c), the operator gets an own certificate and manages the ROA at
+        my.ripe.net > RPKI > ROAs > "Add ROA".
+    verify:
+      - "https://stat.ripe.net/data/rpki-validation/data.json?resource=AS215520&prefix=2a0f:85c1:368::/48"
+      - "https://rpki-validator.ripe.net/ui/2a0f:85c1:368::/48"
+      - "https://bgp.tools/prefix/2a0f:85c1:368::/48#rpki"
+
+  - prefix: "44.32.58.0/24"
+    max_length: 24
+    asn: 215520
+    ca: arin-hosted-via-ardc        # ARIN hosted RPKI on ARDC's 44.0.0.0/9 certificate
+    status: missing                 # RIPEstat: "unknown" (no covering ROA at all) on 2026-09-10
+    who: "ARDC (portal.ampr.org request / support ticket); the operator has no ARIN Online account for this space"
+    ardc_portal:
+      steps:
+        - "Log in at https://portal.ampr.org (44Net portal), open the allocation 44.32.58.0/24 (callsign KN4LJL)."
+        - "Use the allocation's BGP / 'Request ROA' action if present; otherwise open a support request (support@ardc.net) with the wording in infra/network/irr/ardc-request.md section 2."
+        - "Ask for exactly: prefix 44.32.58.0/24, origin AS215520, maxLength 24 (one ROA, no AS20473 ROA: Vultr's account is configured for AS215520 and only needs the customer ASN)."
+        - "ARDC creates the ROA in ARIN Online (hosted RPKI, ARDC's org). Expect 1-3 business days plus a few hours for validators to pick it up."
+      note: >
+        ARIN's hosted RPKI publishes to rpki.arin.net; ARIN's TAL is now shipped by
+        routinator/rpki-client/Fort by default, so no extra step is needed on the
+        validator side. Do NOT ask for a ROA under a /9 with maxLength 24: that would
+        authorise AS215520 for every /24 in 44.0.0.0/9.
+    verify:
+      - "https://stat.ripe.net/data/rpki-validation/data.json?resource=AS215520&prefix=44.32.58.0/24"
+      - "https://rpki-validator.ripe.net/ui/44.32.58.0/24"
+      - "https://bgp.tools/prefix/44.32.58.0/24#rpki"
+      - "scripts/netcheck (row rpki:44.32.58.0/24 must be OK)"

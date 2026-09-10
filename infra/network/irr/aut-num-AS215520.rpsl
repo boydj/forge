@@ -1,0 +1,55 @@
+# aut-num AS215520 -- full replacement (RIPE DB, Webupdates text view or
+# syncupdates with a Database API key; JOSHBOYD-MNT is SSO-only, no password
+# line). Remove every line starting with '#' before submitting.
+#
+# Changes against the object as of 2026-09-10 (created 2024-02-12, never edited):
+#   - import/export for AS209735 (Lagrange) and AS207841 (Inferno) removed:
+#     neither has been an observed neighbour (RIPEstat asn-neighbours).
+#   - IPv4 + IPv6 policy for AS20473 (Vultr) added: the forge POPs.
+#   - IPv6 policy for AS835 (GoCodeIT/Xenyth, Toronto) added: it carries the
+#     /48 today. Delete those two lines when the section-6 withdraw is done
+#     (docs/network-architecture.md, section 6).
+#   - exports reference the as-set AS215520:AS-ALL (create it first,
+#     as-set-AS215520-AS-ALL.rpsl; it expands to AS215520 only).
+#   - remarks with abuse mailbox, website, and the policy summary.
+# RIPE NCC-managed attributes (sponsoring-org, status, mnt-by RIPE-NCC-END-MNT,
+# created, last-modified) are copied verbatim.
+
+aut-num:        AS215520
+as-name:        JOSH-BOYD
+descr:          AS215520 - hobbynet, Ashburn VA, US
+descr:          anycast Gemini/Titan/SSH forge: git.as215520.net
+org:            ORG-JB158-RIPE
+sponsoring-org: ORG-ICL64-RIPE
+remarks:        ----------------------------------------------------------
+remarks:        Originates exactly two prefixes, both anycast, both with
+remarks:        RPKI ROAs at maxLength == prefix length:
+remarks:          44.32.58.0/24      (ARDC 44Net, ARIN TA)
+remarks:          2a0f:85c1:368::/48 (RIPE TA)
+remarks:        as-set: AS215520:AS-ALL   (RIPE::AS215520:AS-ALL in PeeringDB)
+remarks:        ----------------------------------------------------------
+remarks:        --- IPv4 transit: Vultr / The Constant Company ---
+import:         from AS20473 accept ANY
+export:         to AS20473 announce AS215520:AS-ALL
+remarks:        --- IPv6 transit: Vultr ---
+mp-import:      afi ipv6.unicast from AS20473 accept ANY
+mp-export:      afi ipv6.unicast to AS20473 announce AS215520:AS-ALL
+remarks:        --- IPv6 transit: GoCodeIT / Xenyth Cloud, Toronto ---
+remarks:        (carries 2a0f:85c1:368::/48 today; remove after migration)
+mp-import:      afi ipv6.unicast from AS835 accept ANY
+mp-export:      afi ipv6.unicast to AS835 announce AS215520:AS-ALL
+remarks:        ----------------------------------------------------------
+remarks:        abuse:   abuse@unplanks.com  (abuse-c ACRO55456-RIPE)
+remarks:        noc:     boydjd@jbip.net
+remarks:        web:     https://as215520.net
+remarks:        gemini:  gemini://git.as215520.net/
+remarks:        peering: open policy, see PeeringDB net 35354
+remarks:        ----------------------------------------------------------
+admin-c:        JB21841-RIPE
+tech-c:         JB21841-RIPE
+status:         ASSIGNED
+mnt-by:         RIPE-NCC-END-MNT
+mnt-by:         JOSHBOYD-MNT
+created:        2024-02-12T15:41:50Z
+last-modified:  2024-02-12T15:41:50Z
+source:         RIPE

@@ -1,0 +1,86 @@
+# Desired PeeringDB record for AS215520 (net id 35354, org id 37423).
+# Edited by hand at https://www.peeringdb.com/net/35354 (PeeringDB account
+# with the org's admin permission; there is no automation and no API write
+# from this repo). scripts/netcheck compares the public fields listed under
+# `checked_by_netcheck` with address-plan.yaml (peeringdb:).
+#
+# Observed on 2026-09-10 (public-state.yaml): irr_as_set empty, prefix counts
+# 100/100, no public POCs, three IPv6-only IX entries, website https://as215520.net.
+version: 1
+net_id: 35354
+org_id: 37423
+url: https://www.peeringdb.com/net/35354
+
+net:
+  name: "AS215520"                       # currently "JOSHUA BOYD"; the ASN as name is the hobbynet convention
+  aka: "Joshua Boyd hobbynet"
+  website: "https://as215520.net"        # PeeringDB validates http(s) URLs only; gemini:// is rejected by the form,
+                                         # so keep https and put the Gemini URL in `notes`
+  asn: 215520
+  irr_as_set: "RIPE::AS215520:AS-ALL"    # create the as-set first (infra/network/irr/as-set-AS215520-AS-ALL.rpsl);
+                                         # PeeringDB verifies the object exists in the named source
+  looking_glass: ""                      # none yet; later https://lg.as215520.net if one is built
+  route_server: ""
+  info_type: "Educational/Research"      # keep; secondary "Network Services" may stay
+  info_types: ["Educational/Research", "Network Services"]
+  info_prefixes4: 1                      # exactly one /24 (was 100)
+  info_prefixes6: 1                      # exactly one /48 (was 100)
+  info_traffic: "0-20Mbps"
+  info_ratio: "Balanced"
+  info_scope: "Global"                   # anycast from several continents
+  info_unicast: true
+  info_multicast: false
+  info_ipv6: true
+  info_never_via_route_servers: false
+  policy_general: "Open"
+  policy_locations: "Not Required"
+  policy_ratio: false
+  policy_contracts: "Not Required"
+  policy_url: "https://as215520.net/peering"        # publish a one-paragraph policy there
+  notes: |
+    Anycast hobbynet: one IPv4 /24 (44.32.58.0/24, ARDC 44Net) and one IPv6 /48
+    (2a0f:85c1:368::/48) originated from every POP. Services: Gemini/Titan
+    (1965) and SSH (22) on git.as215520.net; gemini://git.as215520.net/
+    RPKI ROAs exist for both prefixes at maxLength == prefix length; please
+    drop invalids. IRR: RIPE::AS215520:AS-ALL. Abuse: abuse@unplanks.com.
+  allow_ixp_update: true                 # let IXPs push port/IP changes for our netixlan entries
+
+# Public POCs (Contacts tab). Visibility "Public" for all three so route-server
+# operators and abuse desks can reach us without a PeeringDB account. Use role
+# mailboxes, not the personal address, and make sure each mailbox is delivered
+# (readiness item 18; abuse@unplanks.com is Cloudflare Email Routing).
+pocs:
+  - { role: Abuse,     name: "AS215520 abuse",   email: "abuse@unplanks.com", visible: Public }
+  - { role: Technical, name: "AS215520 NOC",     email: "boydjd@jbip.net",    visible: Public, phone: "+1 513 375 0157" }
+  - { role: Policy,    name: "AS215520 peering", email: "boydjd@jbip.net",    visible: Public }
+  # Optional later: { role: NOC, ... } once a noc@as215520.net alias exists.
+
+# Organisation (org 37423): address fields are empty today; fill them so the
+# record passes PeeringDB's "verified" checks and matches RIPE.
+org:
+  name: "Joshua Boyd"
+  website: "https://as215520.net"
+  address1: "PMB 131, 43330 Junction Plz Ste 164"
+  city: "Ashburn"
+  state: "VA"
+  zipcode: "20147"
+  country: "US"
+
+# IX presences (netixlan). Keep all three; they are live RS sessions
+# (public-state.yaml). None has IPv4 because the /24 was never announced
+# there; add the IPv4 addresses when the IXPs assign them and the /24 is
+# announced from a POP that reaches the IX. Do not add the Vultr POPs as
+# "facilities": Vultr locations are not PeeringDB facilities we occupy.
+ixps_keep:
+  - { ix_id: 3821, name: "BGP.Exchange - London",  ipaddr6: "2a0e:8f01:1000:10::102", speed: 1000, is_rs_peer: true, ipaddr4: null }
+  - { ix_id: 4059, name: "ONIX",                   ipaddr6: "2001:504:125:e1::bba",   speed: 100,  is_rs_peer: true, ipaddr4: null }
+  - { ix_id: 4843, name: "BGP.Exchange - Toronto", ipaddr6: "2a0e:8f01:1000:33::12b", speed: 1000, is_rs_peer: true, ipaddr4: null }
+facilities: []                           # none
+
+checked_by_netcheck: [irr_as_set, info_prefixes4, info_prefixes6, "pocs (public roles Abuse, Technical, Policy)"]
+
+# Order of operations: as-set in RIPE -> net fields -> POCs -> org address.
+# PeeringDB caches the anonymous API for a few minutes and throttles
+# anonymous clients; export PEERINGDB_API_KEY (a read-only personal key from
+# https://www.peeringdb.com/account/api_keys) before running scripts/netcheck
+# repeatedly.

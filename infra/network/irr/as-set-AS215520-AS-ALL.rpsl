@@ -1,0 +1,26 @@
+# as-set AS215520:AS-ALL -- NEW object (RIPE DB). Does not exist as of
+# 2026-09-10 (rest.db.ripe.net returns 404; RADB has no copy either).
+#
+# Hierarchical name: RIPE only lets the maintainer of aut-num AS215520 create
+# AS215520:<name>, so JOSHBOYD-MNT is the required authorisation and nobody
+# else can squat the set. Members are the ASN only; there are no downstreams.
+# Add a member only when AS215520 actually provides transit to it.
+#
+# Submit via Webupdates (SSO) or syncupdates with a Database API key; no
+# password line. Remove the '#' comment lines first.
+#
+# Afterwards: PeeringDB net 35354 irr_as_set = RIPE::AS215520:AS-ALL,
+# and upstreams / IX route servers can filter on it:
+#   bgpq4 -4 -S RIPE -l as215520 AS215520:AS-ALL
+#   bgpq4 -6 -S RIPE -l as215520 AS215520:AS-ALL
+
+as-set:         AS215520:AS-ALL
+descr:          AS215520 and customers (none): all prefixes originated by AS215520
+descr:          44.32.58.0/24 and 2a0f:85c1:368::/48, anycast
+members:        AS215520
+remarks:        Referenced from PeeringDB (RIPE::AS215520:AS-ALL) and the
+remarks:        aut-num export lines. Contact: boydjd@jbip.net
+tech-c:         JB21841-RIPE
+admin-c:        JB21841-RIPE
+mnt-by:         JOSHBOYD-MNT
+source:         RIPE

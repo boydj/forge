@@ -1,0 +1,703 @@
+#!/usr/bin/env python3
+"""netcheck: compare the public state of AS215520 with the desired state.
+
+Inputs:
+  infra/network/address-plan.yaml     prefixes, IRR/PeeringDB/rDNS desired state
+  infra/network/rpki/desired-roas.yaml ROAs that must validate
+
+Live sources (HTTPS JSON, 10 s timeout, read-only):
+  RIPEstat      rpki-validation, routing-status, announced-prefixes
+  RIPE DB REST  aut-num, as-set, route6, inet6num (mnt-routes)
+  RADB          https://www.radb.net/query (HTML, parsed minimally)
+  PeeringDB     /api/net?asn=, /api/poc?net_id=
+  DNS-over-HTTPS (cloudflare-dns.com): NS/DS/A/AAAA
+
+Usage:
+  scripts/netcheck [--expect announced|withdrawn|<prefix>=<state>,...] [--json] [--offline]
+                   [--plan FILE] [--roas FILE] [--timeout SECONDS]
+
+Exit status: 0 all checks OK, 1 at least one DRIFT, 2 no drift but some UNKNOWN
+(network failure or unparsable answer). Nothing here ever changes remote state.
+Only the standard library and PyYAML are used.
+"""
+
+from __future__ import annotations
+
+import argparse
+import html
+import ipaddress
+import json
+import os
+import re
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Callable
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    sys.exit("netcheck: PyYAML is required (pip install --user pyyaml)")
+
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
+DEFAULT_PLAN = os.path.join(REPO_ROOT, "infra", "network", "address-plan.yaml")
+DEFAULT_ROAS = os.path.join(REPO_ROOT, "infra", "network", "rpki", "desired-roas.yaml")
+
+RIPESTAT = "https://stat.ripe.net/data"
+RIPEDB = "https://rest.db.ripe.net/ripe"
+RADB = "https://www.radb.net/query"
+PEERINGDB = "https://www.peeringdb.com/api"
+DOH = "https://cloudflare-dns.com/dns-query"
+USER_AGENT = "forge-netcheck/1 (+https://as215520.net)"
+
+OK, DRIFT, UNKNOWN, SKIP = "OK", "DRIFT", "UNKNOWN", "SKIP"
+
+# RIS visibility thresholds: "announced" means most full-feed peers see it,
+# "withdrawn" tolerates a couple of stale paths (RIS keeps them for days).
+ANNOUNCED_MIN_FRACTION = 0.5
+WITHDRAWN_MAX_PEERS = 3
+
+
+class FetchError(Exception):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# HTTP (the single function the tests monkeypatch)
+# ---------------------------------------------------------------------------
+
+TIMEOUT = 10.0
+
+
+def fetch(url: str, accept: str = "application/json", headers: dict[str, str] | None = None) -> tuple[int, str]:
+    """GET url, return (status, body). Raises FetchError on any transport problem."""
+    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": USER_AGENT, **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:  # a 404 is an answer, not a failure
+        try:
+            body = exc.read().decode("utf-8", "replace")
+        except Exception:  # pragma: no cover
+            body = ""
+        return exc.code, body
+    except Exception as exc:  # URLError, socket.timeout, ssl errors, ...
+        raise FetchError(f"{type(exc).__name__}: {exc}") from exc
+
+
+def get_json(url: str, accept: str = "application/json", headers: dict[str, str] | None = None) -> tuple[int, Any]:
+    status, body = fetch(url, accept, headers)
+    try:
+        return status, json.loads(body) if body else None
+    except ValueError as exc:
+        raise FetchError(f"non-JSON answer from {url}: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Results
+# ---------------------------------------------------------------------------
+
+class Result:
+    def __init__(self, name: str, status: str, expected: str = "", actual: str = "", note: str = ""):
+        self.name, self.status, self.expected, self.actual, self.note = name, status, expected, actual, note
+
+    def as_dict(self) -> dict:
+        return {"check": self.name, "status": self.status, "expected": self.expected, "actual": self.actual, "note": self.note}
+
+
+def unknown(name: str, expected: str, exc: Exception | str) -> Result:
+    return Result(name, UNKNOWN, expected, "", f"fetch failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Context and YAML validation (the offline part)
+# ---------------------------------------------------------------------------
+
+class Context:
+    def __init__(self, plan: dict, roas: dict, expect: dict[str, str]):
+        self.plan = plan
+        self.roas = roas
+        self.expect = expect  # prefix -> announced|withdrawn
+        self.asn = int(plan["bgp"]["local_asn"])
+        self.zone = plan["zone"]
+        self.prefixes = [str(p["prefix"]) for p in plan["bgp"]["prefixes"]]
+        self.forward_ns: list[str] | None = None  # filled by the zone NS check, reused by rDNS checks
+
+
+def load_yaml(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    if not isinstance(data, dict):
+        raise SystemExit(f"netcheck: {path}: top level must be a mapping")
+    return data
+
+
+def parse_expect(text: str, prefixes: list[str]) -> dict[str, str]:
+    """'announced' | 'withdrawn' | 'p1=announced,p2=withdrawn' -> {prefix: state}."""
+    states = {"announced", "withdrawn"}
+    if text in states:
+        return {p: text for p in prefixes}
+    out = {p: "announced" for p in prefixes}
+    for item in text.split(","):
+        if "=" not in item:
+            raise SystemExit(f"netcheck: --expect: {item!r} is neither announced|withdrawn nor <prefix>=<state>")
+        prefix, state = (s.strip() for s in item.split("=", 1))
+        if state not in states:
+            raise SystemExit(f"netcheck: --expect: unknown state {state!r} for {prefix}")
+        try:
+            prefix = str(ipaddress.ip_network(prefix))
+        except ValueError:
+            raise SystemExit(f"netcheck: --expect: invalid prefix {prefix!r}") from None
+        if prefix not in prefixes:
+            raise SystemExit(f"netcheck: --expect: {prefix} is not in bgp.prefixes")
+        out[prefix] = state
+    return out
+
+
+def validate_yaml(plan: dict, roas: dict) -> list[Result]:
+    """Structural checks that need no network. Every problem is a DRIFT (the files are ours)."""
+    results: list[Result] = []
+    problems: list[str] = []
+
+    def need(cond: bool, msg: str) -> None:
+        if not cond:
+            problems.append(msg)
+
+    for key in ("zone", "bgp", "ipv4", "ipv6", "irr", "rpki", "peeringdb", "rdns"):
+        need(key in plan, f"plan: missing top-level key {key!r}")
+    if problems:
+        return [Result("yaml:plan", DRIFT, "well-formed", "; ".join(problems))]
+
+    asn = plan["bgp"].get("local_asn")
+    need(isinstance(asn, int), "plan: bgp.local_asn must be an integer")
+    announced: dict[str, int] = {}
+    for entry in plan["bgp"].get("prefixes", []):
+        try:
+            net = ipaddress.ip_network(entry.get("prefix"))
+        except (ValueError, TypeError):
+            problems.append(f"plan: bgp.prefixes: invalid {entry.get('prefix')!r}")
+            continue
+        announced[str(net)] = net.prefixlen
+        need(entry.get("roa_max_length") == net.prefixlen, f"plan: bgp.prefixes {net}: roa_max_length != prefix length")
+    need(len(announced) >= 1, "plan: bgp.prefixes is empty")
+
+    need(roas.get("asn") == asn, f"roas: asn {roas.get('asn')!r} != plan bgp.local_asn {asn!r}")
+    need(roas.get("expected_validation", "valid") == "valid", "roas: expected_validation must be 'valid'")
+    seen: set[str] = set()
+    for roa in roas.get("roas") or []:
+        try:
+            net = ipaddress.ip_network(roa.get("prefix"))
+        except (ValueError, TypeError):
+            problems.append(f"roas: invalid prefix {roa.get('prefix')!r}")
+            continue
+        key = str(net)
+        seen.add(key)
+        need(key in announced, f"roas: {key} is not in plan bgp.prefixes")
+        need(roa.get("max_length") == net.prefixlen, f"roas: {key} max_length must equal prefix length {net.prefixlen}")
+        need(roa.get("asn") == asn, f"roas: {key} asn must be {asn}")
+        need(roa.get("ca") in ("ripe-hosted", "arin-hosted-via-ardc"), f"roas: {key}: unknown ca {roa.get('ca')!r}")
+    need(seen == set(announced), f"roas: prefixes {sorted(seen)} != plan bgp.prefixes {sorted(announced)}")
+    for roa in plan["rpki"].get("roas", []):
+        p = str(roa.get("prefix"))
+        need(p in seen, f"plan: rpki.roas {p} has no entry in desired-roas.yaml")
+
+    pdb = plan["peeringdb"]
+    need(isinstance(pdb.get("net_id"), int), "plan: peeringdb.net_id must be an integer")
+    need(str(pdb.get("irr_as_set", "")).endswith(str(plan["irr"]["as_set"]["name"])),
+         "plan: peeringdb.irr_as_set must reference irr.as_set.name")
+    need(pdb.get("info_prefixes4") == sum(1 for p in announced if ":" not in p), "plan: peeringdb.info_prefixes4 != number of IPv4 prefixes")
+    need(pdb.get("info_prefixes6") == sum(1 for p in announced if ":" in p), "plan: peeringdb.info_prefixes6 != number of IPv6 prefixes")
+    need(f"AS{asn}" in (plan["irr"]["as_set"].get("members") or []), "plan: irr.as_set.members must include the local AS")
+    for z in plan["rdns"].get("zones", []):
+        need(str(z.get("zone", "")).endswith((".in-addr.arpa", ".ip6.arpa")), f"plan: rdns zone {z.get('zone')!r} is not a reverse zone")
+    for fam in ("ipv4", "ipv6"):
+        need(any(s.get("dns") for s in plan[fam].get("services", [])), f"plan: {fam}.services has no entry with a dns label")
+
+    if problems:
+        results.append(Result("yaml:consistency", DRIFT, "plan and desired-roas agree", "; ".join(problems)))
+    else:
+        results.append(Result("yaml:consistency", OK, "plan and desired-roas agree",
+                              f"{len(announced)} prefixes, {len(seen)} ROAs, AS{asn}"))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# RPKI and routing (RIPEstat)
+# ---------------------------------------------------------------------------
+
+def check_rpki(ctx: Context) -> list[Result]:
+    out = []
+    want = ctx.roas.get("expected_validation", "valid")
+    for roa in ctx.roas.get("roas") or []:
+        prefix, asn, maxlen = roa["prefix"], roa["asn"], roa["max_length"]
+        name = f"rpki:{prefix}"
+        expected = f"{want} (AS{asn} maxLength {maxlen})"
+        url = f"{RIPESTAT}/rpki-validation/data.json?resource=AS{asn}&prefix={urllib.parse.quote(prefix, safe='')}"
+        try:
+            status, data = get_json(url)
+        except FetchError as exc:
+            out.append(unknown(name, expected, exc))
+            continue
+        try:
+            d = data["data"]
+            validity = d["status"]
+            roas = d.get("validating_roas") or []
+        except (KeyError, TypeError):
+            out.append(Result(name, UNKNOWN, expected, "", f"unexpected RIPEstat answer (HTTP {status})"))
+            continue
+        ours = [r for r in roas if str(r.get("origin")) == str(asn) and r.get("prefix") == prefix]
+        actual = validity
+        if ours:
+            actual += f" (ROA {ours[0].get('prefix')} maxLength {ours[0].get('max_length')})"
+        elif roas:
+            actual += " (covering ROAs: " + ", ".join(f"AS{r.get('origin')} {r.get('prefix')}/{r.get('max_length')}" for r in roas) + ")"
+        ok = validity == want and (not ours or int(ours[0].get("max_length", -1)) == int(maxlen))
+        out.append(Result(name, OK if ok else DRIFT, expected, actual, "" if ok else f"ROA missing or wrong; see desired-roas.yaml ({roa.get('ca')})"))
+    return out
+
+
+def check_routing(ctx: Context) -> list[Result]:
+    out = []
+    for prefix in ctx.prefixes:
+        name = f"routing:{prefix}"
+        want = ctx.expect.get(prefix, "announced")
+        expected = f"{want} by AS{ctx.asn}"
+        fam = "v6" if ":" in prefix else "v4"
+        url = f"{RIPESTAT}/routing-status/data.json?resource={urllib.parse.quote(prefix, safe='')}"
+        try:
+            status, data = get_json(url)
+        except FetchError as exc:
+            out.append(unknown(name, expected, exc))
+            continue
+        try:
+            d = data["data"]
+            vis = d["visibility"][fam]
+            seeing, total = int(vis["ris_peers_seeing"]), int(vis["total_ris_peers"])
+            origins = [int(o["origin"]) for o in d.get("origins") or []]
+        except (KeyError, TypeError, ValueError):
+            out.append(Result(name, UNKNOWN, expected, "", f"unexpected RIPEstat answer (HTTP {status})"))
+            continue
+        frac = seeing / total if total else 0.0
+        if seeing == 0:
+            state = "withdrawn"
+        elif frac >= ANNOUNCED_MIN_FRACTION:
+            state = "announced"
+        elif seeing <= WITHDRAWN_MAX_PEERS:
+            state = "withdrawn"
+        else:
+            state = "partial"
+        actual = f"{state}: {seeing}/{total} RIS peers"
+        note = ""
+        if origins:
+            actual += ", origin " + ",".join(f"AS{o}" for o in origins)
+        if state == "withdrawn" and seeing:
+            note = f"{seeing} stale RIS path(s)"
+        foreign = [o for o in origins if o != ctx.asn]
+        ok = state == want and not foreign
+        if foreign:
+            note = "announced by another origin: " + ",".join(f"AS{o}" for o in foreign)
+        out.append(Result(name, OK if ok else DRIFT, expected, actual, note))
+    return out
+
+
+def check_announced_prefixes(ctx: Context) -> list[Result]:
+    name = f"routing:AS{ctx.asn}-prefixes"
+    expected = "only " + ", ".join(ctx.prefixes)
+    url = f"{RIPESTAT}/announced-prefixes/data.json?resource=AS{ctx.asn}"
+    try:
+        status, data = get_json(url)
+    except FetchError as exc:
+        return [unknown(name, expected, exc)]
+    try:
+        entries = data["data"]["prefixes"]
+        latest = data["data"].get("latest_time", "")
+    except (KeyError, TypeError):
+        return [Result(name, UNKNOWN, expected, "", f"unexpected RIPEstat answer (HTTP {status})")]
+    current: list[str] = []
+    for e in entries:
+        p = str(ipaddress.ip_network(e["prefix"]))
+        # "current" = a timeline that ends at the latest data point
+        if any(t.get("endtime") == latest for t in e.get("timelines") or []):
+            current.append(p)
+    extra = sorted(set(current) - set(ctx.prefixes))
+    actual = ", ".join(sorted(current)) or "none"
+    if extra:
+        return [Result(name, DRIFT, expected, actual, "unexpected prefixes originated: " + ", ".join(extra))]
+    return [Result(name, OK, expected, actual, "RIS window ending " + latest)]
+
+
+# ---------------------------------------------------------------------------
+# RIPE DB
+# ---------------------------------------------------------------------------
+
+def ripe_object(kind: str, key: str) -> tuple[int, dict[str, list[str]] | None]:
+    """Return (http status, {attr: [values]}) for one RIPE DB object, or None when absent."""
+    url = f"{RIPEDB}/{kind}/{urllib.parse.quote(key, safe=':/')}.json?unfiltered"
+    status, data = get_json(url)
+    if status == 404:
+        return status, None
+    try:
+        objs = data["objects"]["object"]
+        attrs: dict[str, list[str]] = {}
+        for a in objs[0]["attributes"]["attribute"]:
+            attrs.setdefault(a["name"], []).append(str(a["value"]).strip())
+        return status, attrs
+    except (KeyError, TypeError, IndexError):
+        raise FetchError(f"unexpected RIPE DB answer for {kind} {key} (HTTP {status})")
+
+
+def expected_peer_asns(plan: dict) -> set[int]:
+    asns: set[int] = set()
+    for line in plan["irr"].get("aut_num_policy") or []:
+        for m in re.finditer(r"from AS(\d+)", str(line)):
+            asns.add(int(m.group(1)))
+    return asns
+
+
+def check_ripe_db(ctx: Context) -> list[Result]:
+    out = []
+    plan = ctx.plan
+    asn = f"AS{ctx.asn}"
+
+    # aut-num: import/export mention every expected upstream
+    want = expected_peer_asns(plan)
+    expected = "import/export for " + ", ".join(f"AS{a}" for a in sorted(want))
+    try:
+        _, attrs = ripe_object("aut-num", asn)
+        if attrs is None:
+            out.append(Result("ripe:aut-num", DRIFT, expected, "object missing"))
+        else:
+            policy = " ".join(attrs.get("import", []) + attrs.get("export", []) + attrs.get("mp-import", []) + attrs.get("mp-export", []))
+            have = {int(m) for m in re.findall(r"\bAS(\d+)\b", policy)} - {ctx.asn}
+            missing = sorted(want - have)
+            stale = sorted(have - want)
+            actual = "peers: " + (", ".join(f"AS{a}" for a in sorted(have)) or "none")
+            note = ""
+            if missing:
+                note = "missing " + ", ".join(f"AS{a}" for a in missing)
+            if stale:
+                note += ("; " if note else "") + "not in plan: " + ", ".join(f"AS{a}" for a in stale)
+            out.append(Result("ripe:aut-num", OK if not missing else DRIFT, expected, actual, note))
+    except FetchError as exc:
+        out.append(unknown("ripe:aut-num", expected, exc))
+
+    # as-set
+    a = plan["irr"]["as_set"]
+    expected = f"{a['name']} members {', '.join(a['members'])} mnt-by {a['mnt_by']}"
+    try:
+        _, attrs = ripe_object("as-set", a["name"])
+        if attrs is None:
+            out.append(Result("ripe:as-set", DRIFT, expected, "object missing", "create it (infra/network/irr/as-set-AS215520-AS-ALL.rpsl)"))
+        else:
+            members = {m.strip() for v in attrs.get("members", []) for m in v.split(",")}
+            missing = [m for m in a["members"] if m not in members]
+            mnt_ok = a["mnt_by"] in attrs.get("mnt-by", [])
+            actual = f"members {', '.join(sorted(members)) or 'none'}; mnt-by {', '.join(attrs.get('mnt-by', []))}"
+            ok = not missing and mnt_ok
+            out.append(Result("ripe:as-set", OK if ok else DRIFT, expected, actual, "" if ok else "members or mnt-by differ"))
+    except FetchError as exc:
+        out.append(unknown("ripe:as-set", expected, exc))
+
+    # route / route6 objects in RIPE; mnt-routes on the inet6num
+    for obj in plan["irr"].get("route_objects", []):
+        prefix, origin, source = obj["prefix"], obj["origin"], obj.get("source", "RIPE")
+        if source != "RIPE":
+            continue
+        kind = "route6" if ":" in prefix else "route"
+        name = f"ripe:{kind}:{prefix}"
+        expected = f"origin {origin} mnt-by {obj.get('mnt_by')}"
+        try:
+            _, attrs = ripe_object(kind, f"{prefix}{origin}")
+            if attrs is None:
+                out.append(Result(name, DRIFT, expected, "object missing"))
+            else:
+                ok = origin in attrs.get("origin", []) and str(obj.get("mnt_by")) in attrs.get("mnt-by", [])
+                actual = f"origin {','.join(attrs.get('origin', []))} mnt-by {','.join(attrs.get('mnt-by', []))}"
+                out.append(Result(name, OK if ok else DRIFT, expected, actual))
+        except FetchError as exc:
+            out.append(unknown(name, expected, exc))
+
+        ikind = "inet6num" if ":" in prefix else "inetnum"
+        name = f"ripe:{ikind}:{prefix}"
+        expected = f"mnt-routes {obj.get('mnt_by')}"
+        try:
+            _, attrs = ripe_object(ikind, prefix)
+            if attrs is None:
+                out.append(Result(name, DRIFT, expected, "object missing"))
+            else:
+                mr = attrs.get("mnt-routes", [])
+                ok = str(obj.get("mnt_by")) in mr
+                actual = f"mnt-routes {','.join(mr) or 'none'}; mnt-by {','.join(attrs.get('mnt-by', []))}; mnt-domains {','.join(attrs.get('mnt-domains', [])) or 'none'}"
+                out.append(Result(name, OK if ok else DRIFT, expected, actual))
+        except FetchError as exc:
+            out.append(unknown(name, expected, exc))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# RADB (HTML)
+# ---------------------------------------------------------------------------
+
+def parse_radb_html(body: str) -> list[dict[str, list[str]]]:
+    """Extract RPSL objects from radb.net's query page (<pre class="query-result"><code>...)."""
+    objects = []
+    for block in re.findall(r'<pre class="query-result[^"]*">\s*<code>(.*?)</code>', body, flags=re.S):
+        text = html.unescape(re.sub(r"<[^>]+>", "", block))
+        attrs: dict[str, list[str]] = {}
+        for line in text.splitlines():
+            m = re.match(r"^([a-z0-9-]+):\s*(.*)$", line.strip())
+            if m:
+                attrs.setdefault(m.group(1), []).append(m.group(2).strip())
+        if attrs:
+            objects.append(attrs)
+    return objects
+
+
+def check_radb(ctx: Context) -> list[Result]:
+    out = []
+    for obj in ctx.plan["irr"].get("route_objects", []):
+        if obj.get("source") != "RADB":
+            continue
+        prefix, origin = obj["prefix"], obj["origin"]
+        kind = "route6" if ":" in prefix else "route"
+        name = f"radb:{kind}:{prefix}"
+        expected = f"origin {origin} mnt-by {obj.get('mnt_by')}"
+        url = f"{RADB}?keywords={urllib.parse.quote(prefix, safe='')}"
+        try:
+            status, body = fetch(url, accept="text/html")
+        except FetchError as exc:
+            out.append(unknown(name, expected, exc))
+            continue
+        objects = parse_radb_html(body)
+        if status != 200 or not objects:
+            out.append(Result(name, UNKNOWN, expected, "", f"could not parse radb.net HTML (HTTP {status}); check with: whois -h whois.radb.net {prefix}"))
+            continue
+        match = [o for o in objects if o.get(kind) == [prefix] and origin in o.get("origin", [])]
+        if not match:
+            out.append(Result(name, DRIFT, expected, "no matching object", "ask the maintainer (ARDC for 44Net) to create it"))
+            continue
+        mnt = match[0].get("mnt-by", [])
+        ok = str(obj.get("mnt_by")) in mnt
+        out.append(Result(name, OK if ok else DRIFT, expected, f"origin {origin} mnt-by {','.join(mnt)} descr {','.join(match[0].get('descr', []))}", "" if ok else "maintainer differs"))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# PeeringDB
+# ---------------------------------------------------------------------------
+
+def peeringdb_headers() -> dict[str, str]:
+    """Anonymous PeeringDB clients are throttled hard; an API key (read-only is enough) lifts that."""
+    key = os.environ.get("PEERINGDB_API_KEY")
+    return {"Authorization": f"Api-Key {key}"} if key else {}
+
+
+def check_peeringdb(ctx: Context) -> list[Result]:
+    out = []
+    pdb = ctx.plan["peeringdb"]
+    expected = f"irr_as_set {pdb['irr_as_set']}, prefixes4 {pdb['info_prefixes4']}, prefixes6 {pdb['info_prefixes6']}"
+    poc_expected = "public POCs: " + ", ".join(pdb.get("pocs") or [])
+    headers = peeringdb_headers()
+    try:
+        status, data = get_json(f"{PEERINGDB}/net?asn={ctx.asn}", headers=headers)
+    except FetchError as exc:
+        return [unknown("peeringdb:net", expected, exc), unknown("peeringdb:pocs", poc_expected, exc)]
+    if status != 200:
+        note = f"HTTP {status}" + (" (anonymous throttling; set PEERINGDB_API_KEY or retry in a minute)" if status == 429 else "")
+        return [Result("peeringdb:net", UNKNOWN, expected, "", note), Result("peeringdb:pocs", UNKNOWN, poc_expected, "", note)]
+    nets = (data or {}).get("data") if isinstance(data, dict) else None
+    if not nets:
+        return [Result("peeringdb:net", DRIFT, expected, f"no net record for AS{ctx.asn}"),
+                Result("peeringdb:pocs", SKIP, poc_expected, "", "no net record")]
+    net = nets[0]
+    problems = []
+    if str(net.get("irr_as_set") or "") != str(pdb["irr_as_set"]):
+        problems.append(f"irr_as_set={net.get('irr_as_set') or '(empty)'}")
+    for key in ("info_prefixes4", "info_prefixes6"):
+        if net.get(key) != pdb[key]:
+            problems.append(f"{key}={net.get(key)}")
+    actual = f"net {net.get('id')}: irr_as_set {net.get('irr_as_set') or '(empty)'}, prefixes4 {net.get('info_prefixes4')}, prefixes6 {net.get('info_prefixes6')}, policy {net.get('policy_general')}"
+    out.append(Result("peeringdb:net", OK if not problems else DRIFT, expected, actual, "; ".join(problems)))
+
+    want_roles = list(pdb.get("pocs") or [])
+    net_id = net.get("id", pdb.get("net_id"))
+    try:
+        status, data = get_json(f"{PEERINGDB}/poc?net_id={net_id}", headers=headers)
+    except FetchError as exc:
+        out.append(unknown("peeringdb:pocs", poc_expected, exc))
+        return out
+    if status != 200:
+        out.append(Result("peeringdb:pocs", UNKNOWN, poc_expected, "", f"HTTP {status}"))
+        return out
+    pocs = (data or {}).get("data") or []
+    roles = sorted({str(p.get("role")) for p in pocs})
+    missing = [r for r in want_roles if r not in roles]
+    actual = f"{len(pocs)} visible: {', '.join(roles) or 'none'}"
+    out.append(Result("peeringdb:pocs", OK if not missing else DRIFT, poc_expected, actual,
+                      "" if not missing else "missing or not public: " + ", ".join(missing)))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# DNS over HTTPS
+# ---------------------------------------------------------------------------
+
+RRTYPE = {"A": 1, "NS": 2, "AAAA": 28, "DS": 43}
+
+
+def doh(name: str, rtype: str) -> tuple[int, list[str]]:
+    """Return (rcode, [rdata,...]) for name/type via Cloudflare DoH."""
+    url = f"{DOH}?name={urllib.parse.quote(name)}&type={rtype}"
+    _, data = get_json(url, accept="application/dns-json")
+    try:
+        rcode = int(data["Status"])
+        answers = [str(a["data"]).rstrip(".").lower() for a in data.get("Answer") or [] if int(a.get("type", -1)) == RRTYPE[rtype]]
+    except (KeyError, TypeError, ValueError):
+        raise FetchError(f"unexpected DoH answer for {name}/{rtype}")
+    return rcode, answers
+
+
+def norm_addr(value: str) -> str:
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return value
+
+
+def check_dns(ctx: Context) -> list[Result]:
+    out = []
+    zone = ctx.zone
+
+    # Zone NS at Cloudflare
+    expected = "delegated to *.ns.cloudflare.com"
+    try:
+        rcode, ns = doh(zone, "NS")
+        ok = rcode == 0 and bool(ns) and all(n.endswith(".ns.cloudflare.com") for n in ns)
+        ctx.forward_ns = sorted(ns) if ok else None
+        out.append(Result(f"dns:{zone}:NS", OK if ok else DRIFT, expected, ", ".join(sorted(ns)) or f"rcode {rcode}"))
+    except FetchError as exc:
+        out.append(unknown(f"dns:{zone}:NS", expected, exc))
+
+    # DS at the parent
+    expected = "DS present at the .net parent"
+    try:
+        rcode, ds = doh(zone, "DS")
+        ok = rcode == 0 and bool(ds)
+        out.append(Result(f"dns:{zone}:DS", OK if ok else DRIFT, expected, f"{len(ds)} DS record(s)" if ds else "none",
+                          "" if ok else "publish the DS from `tofu output dnssec_ds` at Namecheap"))
+    except FetchError as exc:
+        out.append(unknown(f"dns:{zone}:DS", expected, exc))
+
+    # Service A/AAAA
+    for fam, rtype in (("ipv4", "A"), ("ipv6", "AAAA")):
+        for svc in ctx.plan[fam].get("services", []):
+            if not svc.get("dns"):
+                continue
+            fqdn = f"{svc['dns']}.{zone}"
+            want = norm_addr(str(svc["address"]))
+            name = f"dns:{fqdn}:{rtype}"
+            try:
+                rcode, addrs = doh(fqdn, rtype)
+            except FetchError as exc:
+                out.append(unknown(name, want, exc))
+                continue
+            got = sorted(norm_addr(a) for a in addrs)
+            ok = got == [want]
+            out.append(Result(name, OK if ok else DRIFT, want, ", ".join(got) or f"no record (rcode {rcode})",
+                              "" if ok else "apply infra/network/generated/dns-nodes.yaml via infra/opentofu"))
+
+    # Reverse zone delegations: expected NS set = the forward zone's (both live in Cloudflare)
+    for z in ctx.plan.get("rdns", {}).get("zones", []):
+        rzone = z["zone"]
+        name = f"dns:{rzone}:NS"
+        expected = "NS = " + (", ".join(ctx.forward_ns) if ctx.forward_ns else "same as forward zone")
+        try:
+            rcode, ns = doh(rzone, "NS")
+        except FetchError as exc:
+            out.append(unknown(name, expected, exc))
+            continue
+        if rcode == 3 or not ns:
+            out.append(Result(name, DRIFT, expected, "not delegated (NXDOMAIN)" if rcode == 3 else f"no NS (rcode {rcode})",
+                              f"delegate via {z.get('delegate_via')}"))
+            continue
+        got = sorted(ns)
+        ok = ctx.forward_ns is None or got == ctx.forward_ns
+        out.append(Result(name, OK if ok else DRIFT, expected, ", ".join(got), "" if ok else "delegated elsewhere"))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
+CHECKS: list[Callable[[Context], list[Result]]] = [
+    check_rpki, check_routing, check_announced_prefixes, check_ripe_db, check_radb, check_peeringdb, check_dns,
+]
+
+
+def run(ctx: Context, offline: bool) -> list[Result]:
+    results = validate_yaml(ctx.plan, ctx.roas)
+    if offline or any(r.status == DRIFT for r in results):
+        if offline:
+            results.append(Result("live", SKIP, "", "", "--offline: no network checks"))
+        return results
+    for check in CHECKS:
+        try:
+            results.extend(check(ctx))
+        except Exception as exc:  # a bug in one check must not hide the others
+            results.append(Result(check.__name__.replace("check_", "") + ":*", UNKNOWN, "", "", f"internal error: {type(exc).__name__}: {exc}"))
+    return results
+
+
+def render_table(results: list[Result]) -> str:
+    rows = [("CHECK", "STATUS", "EXPECTED", "ACTUAL", "NOTE")] + [(r.name, r.status, r.expected, r.actual, r.note) for r in results]
+    widths = [min(max(len(str(row[i])) for row in rows), 60) for i in range(5)]
+    lines = []
+    for n, row in enumerate(rows):
+        cells = [str(c)[:60].ljust(w) for c, w in zip(row, widths)]
+        lines.append("  ".join(cells).rstrip())
+        if n == 0:
+            lines.append("  ".join("-" * w for w in widths))
+    return "\n".join(lines)
+
+
+def exit_code(results: list[Result]) -> int:
+    if any(r.status == DRIFT for r in results):
+        return 1
+    if any(r.status == UNKNOWN for r in results):
+        return 2
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    global TIMEOUT
+    ap = argparse.ArgumentParser(prog="netcheck", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--plan", default=DEFAULT_PLAN)
+    ap.add_argument("--roas", default=DEFAULT_ROAS)
+    ap.add_argument("--expect", default="announced",
+                    help="announced|withdrawn for every prefix, or <prefix>=<state>[,...] (default: announced)")
+    ap.add_argument("--json", action="store_true", help="print results as JSON")
+    ap.add_argument("--offline", action="store_true", help="validate the YAML only")
+    ap.add_argument("--timeout", type=float, default=10.0, help="per-request timeout in seconds (default 10)")
+    args = ap.parse_args(argv)
+    TIMEOUT = args.timeout
+
+    plan = load_yaml(args.plan)
+    roas = load_yaml(args.roas)
+    prefixes = [str(ipaddress.ip_network(p["prefix"])) for p in plan.get("bgp", {}).get("prefixes", []) if p.get("prefix")]
+    ctx = Context(plan, roas, parse_expect(args.expect, prefixes))
+    results = run(ctx, args.offline)
+    code = exit_code(results)
+    counts = {s: sum(1 for r in results if r.status == s) for s in (OK, DRIFT, UNKNOWN, SKIP)}
+    if args.json:
+        print(json.dumps({"results": [r.as_dict() for r in results], "summary": counts, "exit": code, "expect": ctx.expect}, indent=2))
+    else:
+        print(render_table(results))
+        print()
+        print(f"netcheck: {counts[OK]} ok, {counts[DRIFT]} drift, {counts[UNKNOWN]} unknown, {counts[SKIP]} skipped -> exit {code}")
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

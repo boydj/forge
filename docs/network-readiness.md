@@ -269,3 +269,25 @@ Self-service, elsewhere:
 * Whether `abuse@unplanks.com` is actually delivered/read (only MX presence was checked).
 * Exact reason for the 2026-08-27 withdrawal of the /24 (Vultr BGP session ended or was reconfigured; inference only).
 * bgp.tools and bgp.he.net were scraped from HTML without JavaScript; upstream/peer lists there are approximate and were used only to corroborate RIPEstat.
+
+## Verification
+
+`scripts/netcheck` re-checks everything above against the live APIs
+(RIPEstat, RIPE DB REST, RADB, PeeringDB, DNS-over-HTTPS) and compares it with
+the desired state in `infra/network/address-plan.yaml` and
+`infra/network/rpki/desired-roas.yaml`. Exit 0 = all expected, 1 = drift,
+2 = some checks UNKNOWN (network trouble); `--json` for machines, `--offline`
+for YAML-only validation, `--expect announced|withdrawn|<prefix>=<state>,...`
+for the routing expectation. Unit tests: `tests/network/test_netcheck.py`.
+
+Run on 2026-09-10T11:34Z with the default expectation (both prefixes announced):
+8 OK, 11 DRIFT, 0 UNKNOWN, exit 1. Green: v6 ROA valid, v6 announced 320/320,
+no unexpected prefixes, RIPE route6 + inet6num `mnt-routes`, RADB route for
+the /24, zone on Cloudflare. Drift: v4 ROA missing (`unknown`), v4 withdrawn
+(1/326 stale), aut-num lists AS209735/AS207841 instead of AS20473/AS835,
+as-set missing, PeeringDB `irr_as_set` empty / prefixes 100/100 / no public
+POCs, no DS at the parent, no `git.as215520.net` A/AAAA, neither reverse zone
+delegated. With `--expect "44.32.58.0/24=withdrawn,2a0f:85c1:368::/48=announced"`
+(today's truth) the routing rows are OK: 9 OK, 10 DRIFT. The full table and
+the step that clears each row are in `docs/runbooks/network-bootstrap.md`;
+the templates to submit are under `infra/network/{irr,rpki,peeringdb,vultr}/`.
