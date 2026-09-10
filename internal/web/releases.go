@@ -199,6 +199,10 @@ func (h *Handler) titanReleases(req *request, u *store.User, rc *repoCtx, rest [
 	switch {
 	case rest[1] == "edit" && len(rest) == 2:
 		if req.Titan.Edit {
+			if !rc.acc.CanWrite() {
+				_ = gemini.Forbidden(req.w, "not permitted")
+				return
+			}
 			_ = req.w.Header(gemini.StatusSuccess, "text/plain; charset=utf-8")
 			fmt.Fprintf(req.w, "%s\n\n%s\n", rel.Title, rel.Body)
 			return

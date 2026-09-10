@@ -1,0 +1,386 @@
+#!/usr/bin/env bash
+# scripts/interop - interoperability checks with third-party Gemini/Titan
+# clients and feed parsers. See docs/interop.md.
+#
+# Usage:
+#   scripts/interop                     start a scratch forge on high ports, test it, stop it
+#   scripts/interop gemini://host:port  test a running forge (needs INTEROP_REPO to exist
+#                                       there and be public; issues are created in it)
+#
+# Environment:
+#   INTEROP_PORT      Gemini port for the scratch instance (default 19965)
+#   INTEROP_SSH_PORT  SSH port for the scratch instance (default 12222)
+#   INTEROP_REPO      owner/name of the test repository (default alice/proj)
+#   INTEROP_DIR       working directory (default: mktemp -d; keep the path short,
+#                     the hook socket lives under it and Unix socket paths are
+#                     limited to ~108 bytes)
+#   INTEROP_KEEP=1    do not delete the working directory
+#   FORGE             forge binary (default bin/forge, built with `make build` if missing)
+#
+# Clients used when present on PATH (each check is SKIPped otherwise):
+#   gg, titan   gmid's command-line Gemini and Titan clients
+#   gemget      makeworld's Gemini downloader
+#   python3     raw TLS probes (required for the protocol-edge checks), gemfeed/Atom
+#               parsing, and the optional `feedparser` and `ignition` modules
+#   openssl     TLS negotiation, close_notify and SAN checks
+#
+# Exit status is 1 if any check FAILs. SKIP and INFO rows never fail.
+set -u
+
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+FORGE=${FORGE:-$ROOT/bin/forge}
+PORT=${INTEROP_PORT:-19965}
+SSH_PORT=${INTEROP_SSH_PORT:-12222}
+REPO=${INTEROP_REPO:-alice/proj}
+OWNER=${REPO%%/*}
+RNAME=${REPO##*/}
+TARGET=${1:-}
+HOST=localhost
+
+# ---------------------------------------------------------------- results ---
+PASS=0; FAIL=0; SKIP=0; INFO=0
+ROWS=()
+row() { # row STATUS "check" client "detail"
+	local st=$1
+	case $st in PASS) PASS=$((PASS+1));; FAIL) FAIL=$((FAIL+1));; SKIP) SKIP=$((SKIP+1));; INFO) INFO=$((INFO+1));; esac
+	ROWS+=("$(printf '%-4s | %-46s | %-9s | %s' "$st" "$2" "$3" "$4")")
+	[ -n "${INTEROP_VERBOSE:-}" ] && echo "${ROWS[-1]}" >&2
+	return 0
+}
+# expect "check" client "regex" "actual": PASS when actual matches regex.
+expect() {
+	local actual=${4//$'\n'/ }
+	if [[ $actual =~ $3 ]]; then row PASS "$1" "$2" "$actual"; else row FAIL "$1" "$2" "got: $actual (want /$3/)"; fi
+}
+skip() { row SKIP "$1" "$2" "$3"; }
+have() { command -v "$1" >/dev/null 2>&1; }
+pyhas() { python3 -c "import $1" >/dev/null 2>&1; }
+
+W=${INTEROP_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/forge-interop.XXXXXX")}
+mkdir -p "$W"
+cleanup() {
+	if [ -n "${SERVE_PID:-}" ]; then kill "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null; fi
+	[ -n "${INTEROP_KEEP:-}" ] || rm -rf "$W"
+}
+trap cleanup EXIT
+
+# ------------------------------------------------------------ python probes --
+cat > "$W/probe.py" <<'PY'
+import socket, ssl, sys, time, re
+host, port = sys.argv[1], int(sys.argv[2])
+cmd = sys.argv[3]
+def ctx(cert=None, key=None):
+    c = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
+    if cert: c.load_cert_chain(cert, key)
+    return c
+def connect(cert=None, key=None):
+    s = socket.create_connection((host, port), timeout=15)
+    return ctx(cert, key).wrap_socket(s, server_hostname="localhost")
+def readall(t):
+    d = b""
+    try:
+        while True:
+            c = t.recv(65536)
+            if not c: break
+            d += c
+    except Exception as e:
+        return d, "recv-error:%s" % e
+    return d, "eof"
+if cmd == "raw":        # raw BYTES [cert key] -> "<tls>|<status line>|body=<n>|<close>"
+    raw = eval(sys.argv[4])
+    t = connect(*sys.argv[5:7]); t.sendall(raw)
+    d, how = readall(t)
+    head, _, body = d.partition(b"\r\n")
+    print("%s|%s|body=%d|%s" % (t.version(), head.decode(errors="replace"), len(body), how))
+elif cmd == "titan":    # titan LINE BODY [cert key] -> "<secs> <status line>"; body is sent but the
+    line, body = sys.argv[4], sys.argv[5].encode()   # connection is kept open: an immediate answer
+    t = connect(*sys.argv[6:8]); t0 = time.time()      # proves the server did not wait for the body
+    t.sendall(line.encode() + b"\r\n"); t.sendall(body)
+    try:
+        d = t.recv(65536)
+    except Exception as e:
+        print("timeout after %.1fs: %s" % (time.time() - t0, e)); sys.exit(2)
+    head, _, rest = d.partition(b"\r\n")
+    print("%.2fs %s" % (time.time() - t0, head.decode(errors="replace")), "body=%r" % rest[:80] if rest else "")
+elif cmd == "gemfeed":  # gemfeed FILE -> summary; exit 1 when not a valid subscribable page
+    text = open(sys.argv[4], encoding="utf-8").read().split("\n")
+    title = [l for l in text if l.startswith("# ")]
+    entries = [l for l in text if re.match(r"^=>\s*\S+\s+\d{4}-\d{2}-\d{2}([^\d]|$)", l)]
+    bad = [l for l in text if l.startswith("=>") and re.search(r"\d{4}-\d{2}-\d{2}", l) and l not in entries]
+    print("title=%r entries=%d baddated=%d" % (title[0] if title else None, len(entries), len(bad)))
+    sys.exit(0 if title and entries and not bad else 1)
+elif cmd == "atom":     # atom FILE -> ET parse + feedparser (if installed)
+    import xml.etree.ElementTree as ET
+    r = ET.parse(sys.argv[4]).getroot(); ns = "{http://www.w3.org/2005/Atom}"
+    n = len(r.findall(ns + "entry"))
+    out = "wellformed entries=%d id=%s" % (n, r.findtext(ns + "id"))
+    try:
+        import feedparser
+        d = feedparser.parse(sys.argv[4])
+        out += " feedparser: bozo=%s version=%s entries=%d" % (int(d.bozo), d.version, len(d.entries))
+        if d.bozo: out += " (%s)" % d.get("bozo_exception")
+        sys.exit(0 if not d.bozo and d.version == "atom10" and len(d.entries) == n and n > 0 else 1)
+    finally:
+        print(out)
+    sys.exit(0 if n > 0 else 1)
+elif cmd == "ignition": # ignition URL -> "<status> <meta> <class>"
+    import cryptography.hazmat.primitives.serialization  # ignition 1.0.0 lazy-import bug workaround
+    import ignition, os
+    ignition.set_default_hosts_file(os.path.join(os.path.dirname(sys.argv[0]), "ignition_known_hosts"))  # TOFU state stays in the work dir
+    r = ignition.request(sys.argv[4])
+    print(r.status, r.meta, type(r).__name__)
+PY
+raw()   { timeout 20 python3 "$W/probe.py" "$HOST" "$PORT" raw "$@" 2>&1; }
+tit()   { timeout 20 python3 "$W/probe.py" "$HOST" "$PORT" titan "$@" 2>&1; }
+ign()   { timeout 30 python3 "$W/probe.py" "$HOST" "$PORT" ignition "$1" 2>/dev/null | tail -1; }
+ggh()   { timeout 20 gg -N -d header "$@" 2>&1 | head -1; }   # gg: header line only
+ggb()   { timeout 20 gg -N "$@" 2>/dev/null; }                 # gg: body
+gget()  { timeout 20 gemget -i -q --header -o - "$@" 2>&1; }   # gemget: "Header: ..." lines + body
+
+# ---------------------------------------------------------- scratch forge ---
+if [ -z "$TARGET" ]; then
+	[ -x "$FORGE" ] || { echo "building $FORGE"; (cd "$ROOT" && make build) || exit 1; }
+	have git || { echo "git is required"; exit 1; }
+	D=$W/data
+	"$FORGE" admin init --data "$D" --hostname "$HOST" --gemini-listen "127.0.0.1:$PORT,[::1]:$PORT" \
+		--ssh-listen "127.0.0.1:$SSH_PORT" --write-config "$W/forge.toml" >/dev/null || exit 1
+	"$FORGE" admin --config "$W/forge.toml" user create "$OWNER" >/dev/null || exit 1
+	"$FORGE" admin --config "$W/forge.toml" repo create "$REPO" --description "interop test repo" >/dev/null || exit 1
+	( set -e; cd "$W" && rm -rf src && mkdir src && cd src && git init -q -b main
+	  git config user.email interop@example.net && git config user.name "$OWNER"
+	  printf '# %s\n\nInterop test repository.\n' "$RNAME" > README.md && git add . && git commit -qm 'initial import'
+	  printf '\x89PNG\r\n\x1a\n' > logo.png && mkdir src && printf 'package main\n\nfunc main() {}\n' > src/main.go
+	  git add . && git commit -qm 'add main and logo' && git tag v0.1
+	  printf 'hello\n' > hello.txt && git add . && git commit -qm 'add hello'
+	  git push -q "$D/repos/$OWNER/$RNAME.git" main v0.1 ) || exit 1
+	"$FORGE" serve --config "$W/forge.toml" > "$W/serve.log" 2>&1 &
+	SERVE_PID=$!
+	for _ in $(seq 1 50); do
+		timeout 1 bash -c "echo > /dev/tcp/127.0.0.1/$PORT" 2>/dev/null && break
+		kill -0 "$SERVE_PID" 2>/dev/null || { echo "forge exited:"; cat "$W/serve.log"; exit 1; }
+		sleep 0.2
+	done
+	IPV6=1
+else
+	HOST=$(sed -E 's|^gemini://||; s|/.*||; s|:[0-9]+$||; s|^\[(.*)\]$|\1|' <<<"$TARGET")
+	PORT=$(sed -nE 's|^gemini://[^/]*:([0-9]+).*|\1|p' <<<"$TARGET"); PORT=${PORT:-1965}
+	IPV6=
+fi
+U="gemini://$HOST:$PORT"
+T="titan://$HOST:$PORT"
+RP="/~$OWNER/$RNAME"
+
+# client certificates: bob and erin (registered below), dave (never registered)
+mkcert() { openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 30 \
+	-keyout "$W/$1.key" -out "$W/$1.crt" -subj "/CN=$1" >/dev/null 2>&1; }
+have openssl && have python3 && mkcert bob && mkcert dave && mkcert erin && CERTS=1 || CERTS=
+BOB=("$W/bob.crt" "$W/bob.key"); DAVE=("$W/dave.crt" "$W/dave.key"); ERIN=("$W/erin.crt" "$W/erin.key")
+# a unique username per run so the script can be re-run against a live forge
+BOBNAME=bob$(date +%s | tail -c 6)
+
+# ================================================================= checks ====
+# --- Gemini reads
+if have gg; then
+	expect "front page 20 text/gemini" gg '^20 text/gemini' "$(ggh "$U/")"
+	expect "front page body is gemtext" gg '^# ' "$(ggb "$U/" | head -1)"
+	expect "repo page 20" gg '^20 text/gemini' "$(ggh "$U$RP/")"
+	expect "repo page lists clone URL" gg 'git clone' "$(ggb "$U$RP/" | grep -m1 'git clone')"
+	expect "tree page 20" gg '^20 text/gemini' "$(ggh "$U$RP/tree/main/")"
+	expect "raw blob MIME image/png" gg '^20 image/png' "$(ggh "$U$RP/raw/main/logo.png")"
+	expect "raw blob MIME text/markdown" gg '^20 text/markdown' "$(ggh "$U$RP/raw/main/README.md")"
+	expect "31 for missing trailing slash" gg "^31 $RP/" "$(ggh "$U$RP")"
+	expect "51 for unknown path" gg '^51 ' "$(ggh "$U/no-such-page")"
+	expect "60 on /account without cert" gg '^60 ' "$(ggh "$U/account")"
+	expect "empty path gemini://host accepted" gg '^20 text/gemini' "$(ggh "$U")"
+	row INFO "1100-byte URL" gg "client refuses locally (\"iri too long\"); server checked raw below"
+	row INFO "31 redirect" gg "gg does not follow redirects (by design); gemget/ignition checked"
+else
+	skip "gg checks (front/repo/tree/raw/31/51/60)" gg "gg not on PATH (build from gmid)"
+fi
+if have gemget; then
+	expect "front page 20 text/gemini" gemget '^Header: 20 text/gemini' "$(gget "$U/" | head -1)"
+	expect "31 redirect followed to 20" gemget '^Header: 31 .* Header: 20 text/gemini' "$(gget "$U$RP" | grep '^Header:' | tr '\n' ' ')"
+	expect "raw blob bytes intact (png magic)" gemget '^89504e47' "$(timeout 20 gemget -i -q -o - "$U$RP/raw/main/logo.png" | head -c 4 | od -An -tx1 | tr -d ' ')"
+	out=$(gget "$U/no-such-page"); rc=$?
+	expect "51 for unknown path (non-zero exit)" gemget "^Header: 51 .*rc=[1-9]" "$(echo "$out" | head -1) rc=$rc"
+	out=$(gget "$U/account"); rc=$?
+	expect "60 on /account without cert (hint --cert)" gemget "^Header: 60 .*--cert.*rc=[1-9]" "$(echo "$out" | tr '\n' ' ') rc=$rc"
+	row INFO "1100-byte URL" gemget "client refuses locally (\"url is too long\"); server checked raw below"
+else
+	skip "gemget checks (front/31/raw/51/60)" gemget "gemget not on PATH (go install github.com/makeworld-the-better-one/gemget@latest)"
+fi
+if have python3 && pyhas ignition; then
+	expect "front page 20 (SuccessResponse)" ignition '^20 text/gemini.*SuccessResponse' "$(ign "$U/")"
+	expect "31 -> RedirectResponse" ignition "^31 $RP/ RedirectResponse" "$(ign "$U$RP")"
+	expect "51 -> PermFailureResponse" ignition '^51 .*PermFailureResponse' "$(ign "$U/no-such-page")"
+	expect "60 -> ClientCertRequiredResponse" ignition '^60 .*ClientCertRequiredResponse' "$(ign "$U/account")"
+	expect "1100-byte URL -> 59" ignition '^59 ' "$(ign "$U/$(head -c 1100 /dev/zero | tr '\0' a)")"
+else
+	skip "ignition checks" ignition "python module ignition not installed (pip install --user ignition-gemini)"
+fi
+
+# --- request-line edge cases (raw TLS; no client will send these)
+if have python3; then
+	L1024="$U/$(head -c $((1024 - ${#U} - 1)) /dev/zero | tr '\0' a)"
+	expect "1024-byte URL accepted (51, not 59)" raw '\|51 ' "$(raw "b'$L1024\r\n'")"
+	expect "1025-byte URL -> 59" raw '\|59 ' "$(raw "b'${L1024}a\r\n'")"
+	expect "1100-byte URL -> 59" raw '\|59 ' "$(raw "b'$U/$(head -c 1100 /dev/zero | tr '\0' a)\r\n'")"
+	expect "request with LF only (no CR) -> 59" raw '\|59 ' "$(raw "b'$U/\n'")"
+	expect "bare CR inside request line -> 59" raw '\|59 ' "$(raw "b'$U/a\rb\r\n'")"
+	expect "URL with userinfo -> 59" raw '\|59 ' "$(raw "b'gemini://user@$HOST:$PORT/\r\n'")"
+	expect "URL with fragment -> 59" raw '\|59 ' "$(raw "b'$U/#frag\r\n'")"
+	expect "empty request line -> 59" raw '\|59 ' "$(raw "b'\r\n'")"
+	expect "relative URL -> 59" raw '\|59 ' "$(raw "b'/\r\n'")"
+	expect "http:// scheme -> 59" raw '\|59 ' "$(raw "b'http://$HOST:$PORT/\r\n'")"
+	expect "dot-dot path -> 59" raw '\|59 ' "$(raw "b'$U$RP/../../account\r\n'")"
+	expect "empty path gemini://host -> 20" raw '\|20 text/gemini' "$(raw "b'$U\r\n'")"
+	expect "bytes after CRLF are ignored" raw '\|20 text/gemini' "$(raw "b'$U/\r\nignored\r\n'")"
+	row INFO "raw space in URL" raw "$(raw "b'$U/a b\r\n'" | cut -d'|' -f2) (strict servers answer 59)"
+	row INFO "URL host not ours (example.org)" raw "$(raw "b'gemini://example.org/\r\n'" | cut -d'|' -f2) (no 53; any host is served)"
+	expect "TLS 1.3 negotiated" raw '^TLSv1.3\|' "$(raw "b'$U/\r\n'")"
+	expect "clean EOF after response (close_notify)" raw '\|eof$' "$(raw "b'$U/\r\n'")"
+else
+	skip "raw request-line checks" raw "python3 not available"
+fi
+
+# --- TLS with openssl
+if have openssl; then
+	sc=$(printf 'gemini://%s:%s/\r\n' "$HOST" "$PORT" | timeout 15 openssl s_client -connect "$HOST:$PORT" -servername "$HOST" -ign_eof -msg 2>&1)
+	expect "openssl: TLSv1.3, close_notify from server" openssl 'Protocol  : TLSv1.3.*<<< TLS 1.3, Alert.*close_notify' "$(grep -E 'Protocol  :|<<< TLS 1.3, Alert' <<<"$sc" | tr '\n' ' ')"
+	expect "openssl: session ends with 'closed'" openssl '^closed$' "$(grep -x closed <<<"$sc")"
+	san=$(openssl s_client -connect "$HOST:$PORT" -servername "$HOST" </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null | tr -d '\n ')
+	expect "certificate SAN contains hostname" openssl "DNS:$HOST" "$san"
+	expect "no SNI still served (20)" openssl '^20 ' "$(printf 'gemini://%s:%s/\r\n' "$HOST" "$PORT" | timeout 15 openssl s_client -connect "$HOST:$PORT" -noservername -ign_eof 2>/dev/null | grep -m1 '^[0-9][0-9] ')"
+	row INFO "other SNI (other.example)" openssl "$(printf 'gemini://%s:%s/\r\n' "$HOST" "$PORT" | timeout 15 openssl s_client -connect "$HOST:$PORT" -servername other.example -ign_eof 2>/dev/null | grep -m1 '^[0-9][0-9] ') (server ignores SNI)"
+	row INFO "TLS 1.2 offered" openssl "$(timeout 15 openssl s_client -connect "$HOST:$PORT" -tls1_2 </dev/null 2>/dev/null | grep -m1 'Protocol' | tr -s ' ') (minimum per docs/tls.md)"
+else
+	skip "openssl TLS checks" openssl "openssl not on PATH"
+fi
+
+# --- IPv6
+if [ -n "$IPV6" ]; then
+	if have gg; then expect "IPv6 literal host [::1]" gg '^20 text/gemini' "$(ggh "gemini://[::1]:$PORT/")"; fi
+	if have gemget; then expect "IPv6 literal host [::1]" gemget '^Header: 20 text/gemini' "$(gget "gemini://[::1]:$PORT/" | head -1)"; fi
+	have gg || have gemget || skip "IPv6 literal host" - "no client"
+else
+	skip "IPv6 literal host [::1]" - "only checked for the scratch instance"
+fi
+
+# --- certificate registration and INPUT
+if [ -n "$CERTS" ]; then
+	expect "unregistered cert: /account -> 20 register page" raw '\|20 text/gemini' "$(raw "b'$U/account\r\n'" "${BOB[@]}")"
+	expect "/account? -> 10 INPUT for username" raw '\|10 ' "$(raw "b'$U/account?\r\n'" "${BOB[@]}")"
+	if have gemget; then
+		expect "unregistered cert: /account offers registration" gemget 'Header: 20 .*not registered' "$(gget --cert "${BOB[0]}" --key "${BOB[1]}" "$U/account" | grep -E '^Header|registered' | tr '\n' ' ')"
+		expect "/account?<name> -> 30 /account, then 20 Account page" gemget "^Header: 30 /account Header: 20 .*# Account: $BOBNAME" "$(gget --cert "${BOB[0]}" --key "${BOB[1]}" "$U/account?$BOBNAME" | grep -E '^Header|^# ' | tr '\n' ' ')"
+		expect "/new -> 10 INPUT (gemget stops, asks user)" gemget '^Header: 10 .*needs input.*rc=[1-9]' "$( out=$(gget --cert "${BOB[0]}" --key "${BOB[1]}" "$U/new" </dev/null); echo "$out rc=$?" | tr '\n' ' ')"
+		expect "/new?<name> -> 30 to new repo" gemget "^Header: 30 /~$BOBNAME/interop-[0-9]+/ Header: 20" "$(gget --cert "${BOB[0]}" --key "${BOB[1]}" "$U/new?interop-$$" | grep '^Header' | tr '\n' ' ')"
+	elif have gg; then
+		expect "unregistered cert: /account offers registration" gg 'not registered' "$(ggb -C "${BOB[0]}" -K "${BOB[1]}" "$U/account" | grep -m1 registered)"
+		expect "/account?<name> -> 30 /account" gg '^30 /account' "$(ggh -C "${BOB[0]}" -K "${BOB[1]}" "$U/account?$BOBNAME")"
+		expect "/new -> 10 INPUT" gg '^10 ' "$(ggh -C "${BOB[0]}" -K "${BOB[1]}" "$U/new")"
+	else
+		skip "certificate registration flow (client)" - "no client with client-cert support; registering raw"
+		expect "/account?<name> -> 30 /account" raw '\|30 /account' "$(raw "b'$U/account?$BOBNAME\r\n'" "${BOB[@]}")"
+	fi
+	if have gg; then
+		expect "registered cert sees account page" gg "^# Account: $BOBNAME" "$(ggb -C "${BOB[0]}" -K "${BOB[1]}" "$U/account" | head -1)"
+	fi
+	expect "second user registers (erin)" raw '\|30 /account' "$(raw "b'$U/account?erin$BOBNAME\r\n'" "${ERIN[@]}")"
+else
+	skip "certificate registration flow" - "openssl/python3 missing, no client certificates"
+fi
+
+# --- Titan
+if [ -n "$CERTS" ] && have titan; then
+	printf 'Interop issue %s\n\nOpened by gmid titan.\n' "$$" > "$W/issue.txt"
+	out=$(timeout 20 titan -C "${BOB[0]}" -K "${BOB[1]}" -m text/plain "$T$RP/issues/new" "$W/issue.txt" 2>&1); rc=$?
+	expect "Titan upload new issue -> 30 (exit 0)" titan "^$RP/issues/[0-9]+ rc=0" "$out rc=$rc"
+	ISSUE=${out##*/}
+	if have gg && [[ $ISSUE =~ ^[0-9]+$ ]]; then
+		expect "uploaded issue renders with title" gg "^# #$ISSUE Interop issue $$" "$(ggb "$U$RP/issues/$ISSUE" | head -1)"
+		out=$(printf 'A comment via titan.\n' | timeout 20 titan -C "${BOB[0]}" -K "${BOB[1]}" -m text/gemini "$T$RP/issues/$ISSUE/comment" 2>&1); rc=$?
+		expect "Titan comment from stdin -> 30" titan "^$RP/issues/$ISSUE rc=0" "$out rc=$rc"
+		expect "comment appears on issue page" gg 'A comment via titan' "$(ggb "$U$RP/issues/$ISSUE" | grep -m1 'A comment via titan')"
+		out=$(printf 'Interop issue %s (edited)\n\nEdited body.\n' "$$" | timeout 20 titan -C "${BOB[0]}" -K "${BOB[1]}" -m text/plain "$T$RP/issues/$ISSUE/edit" 2>&1); rc=$?
+		expect "Titan edit upload -> 30" titan "^$RP/issues/$ISSUE rc=0" "$out rc=$rc"
+		expect "edited title rendered" gg "^# #$ISSUE Interop issue $$ \(edited\)" "$(ggb "$U$RP/issues/$ISSUE" | head -1)"
+	fi
+	# titan(1) exits "bad fd" (titan.c:121) when the server's RST after an early
+	# rejection races its body write; retry a couple of times, count the races.
+	titan_reject() { local i out rc; for i in 1 2 3; do out=$(timeout 20 titan "$@" 2>&1); rc=$?
+		[[ $out == *"bad fd"* ]] || break; RACES=$((RACES+1)); done; echo "$out rc=$rc"; }
+	RACES=0
+	expect "Titan without cert -> 60 (titan exit 2)" titan 'certificate.*rc=2' "$(titan_reject -m text/plain "$T$RP/issues/new" "$W/issue.txt")"
+	expect "Titan unregistered cert -> 61" titan 'not registered.*rc=2' "$(titan_reject -C "${DAVE[0]}" -K "${DAVE[1]}" -m text/plain "$T$RP/issues/new" "$W/issue.txt")"
+	[ "$RACES" -gt 0 ] && row INFO "titan(1) lost the status line to RST" titan "$RACES time(s) before a retry succeeded (see docs/interop.md)"
+	out=$(timeout 20 titan -C "${BOB[0]}" -K "${BOB[1]}" "$T$RP/issues/1/edit;edit" </dev/null 2>&1); rc=$?
+	row INFO "Titan ;edit via gmid titan" titan "titan(1) always appends ;size=N -> server answers 59 (client has no ;edit support): $out"
+else
+	skip "Titan upload/comment/edit via gmid titan" titan "titan not on PATH or no certificates"
+fi
+if [ -n "$CERTS" ]; then
+	expect "Titan no cert, size=50MB, 5-byte body -> immediate 60" raw '^0\.[0-9]+s 60 ' "$(tit "$T$RP/issues/new;size=50000000" hello)"
+	expect "Titan unregistered cert -> immediate 61" raw '^0\.[0-9]+s 61 ' "$(tit "$T$RP/issues/new;size=50000000" hello "${DAVE[@]}")"
+	expect "Titan size over global cap -> immediate 59" raw '^0\.[0-9]+s 59 upload too large' "$(tit "$T$RP/issues/new;size=99999999999" hello "${BOB[@]}")"
+	expect "Titan size over endpoint limit -> immediate 50" raw '^0\.[0-9]+s 50 body too large' "$(tit "$T$RP/issues/new;size=1000000" hello "${BOB[@]}")"
+	expect "Titan without size -> 59" raw ' 59 ' "$(tit "$T$RP/issues/new" hello "${BOB[@]}")"
+	expect "Titan duplicate size param -> 59" raw ' 59 ' "$(tit "$T$RP/issues/new;size=5;size=5" hello "${BOB[@]}")"
+	expect "Titan disallowed MIME -> 50" raw ' 50 ' "$(tit "$T$RP/issues/new;size=5;mime=image/png" hello "${BOB[@]}")"
+	expect "Titan request line LF only -> 59" raw '\|59 ' "$(raw "b'$T$RP/issues/new;size=5\nhello'" "${BOB[@]}")"
+	out=$(tit "$T$RP/issues/new;size=17" $'Raw titan issue\n\n' "${BOB[@]}"); n=$(sed -nE 's|.* 30 .*/issues/([0-9]+).*|\1|p' <<<"$out")
+	expect "Titan raw upload -> 30 /issues/N" raw " 30 $RP/issues/[0-9]+" "$out"
+	if [[ $n =~ ^[0-9]+$ ]]; then
+		expect "Titan ;edit -> 20 text/plain with title+body" raw "20 text/plain.*body=b'Raw titan issue\\\\n\\\\n" "$(tit "$T$RP/issues/$n/edit;edit" '' "${BOB[@]}")"
+		expect "Titan ;edit without cert -> 60" raw ' 60 ' "$(tit "$T$RP/issues/$n/edit;edit" '')"
+		expect "Titan ;edit with size -> 59" raw ' 59 ' "$(tit "$T$RP/issues/$n/edit;edit;size=5" hello "${BOB[@]}")"
+		expect "Titan edit upload by non-author -> 61" raw ' 61 ' "$(tit "$T$RP/issues/$n/edit;size=5" hello "${DAVE[@]}")"
+		expect "Titan ;edit by other registered user -> 61 (docs/titan.md)" raw ' 61 ' "$(tit "$T$RP/issues/$n/edit;edit" '' "${ERIN[@]}")"
+		expect "Titan edit upload by other registered user -> 61" raw ' 61 ' "$(tit "$T$RP/issues/$n/edit;size=5" hello "${ERIN[@]}")"
+	fi
+else
+	skip "Titan raw checks" raw "no certificates"
+fi
+
+# --- feeds
+if have python3; then
+	fetch() { if have gg; then ggb "$1"; elif have gemget; then timeout 20 gemget -i -q -o - "$1"; else return 1; fi; }
+	if fetch "$U/feed" > "$W/feed.gmi" 2>/dev/null; then
+		out=$(python3 "$W/probe.py" x 0 gemfeed "$W/feed.gmi" 2>&1); rc=$?
+		expect "gemfeed /feed: title + dated entries (subscription spec)" gemfeed '.*rc=0' "$out rc=$rc"
+		expect "gemfeed /feed: entries use '- ' after date" gemfeed '^0$' "$(grep -cE '^=>\s*\S+\s+[0-9]{4}-[0-9]{2}-[0-9]{2} [^-]' "$W/feed.gmi")"
+		fetch "$U$RP/feed" > "$W/repofeed.gmi"
+		out=$(python3 "$W/probe.py" x 0 gemfeed "$W/repofeed.gmi" 2>&1); rc=$?
+		expect "gemfeed $RP/feed valid" gemfeed '.*rc=0' "$out rc=$rc"
+		if have gg; then expect "gemfeed served as text/gemini" gg '^20 text/gemini' "$(ggh "$U/feed")"; fi
+		fetch "$U/atom.xml" > "$W/atom.xml"
+		out=$(python3 "$W/probe.py" x 0 atom "$W/atom.xml" 2>&1); rc=$?
+		if pyhas feedparser; then
+			expect "Atom /atom.xml: well-formed, feedparser bozo=0" atom '.*rc=0' "$out rc=$rc"
+		else
+			expect "Atom /atom.xml: well-formed (ElementTree)" atom '.*rc=0' "$out rc=$rc"
+			skip "Atom feedparser bozo check" feedparser "pip install --user feedparser"
+		fi
+		fetch "$U$RP/atom.xml" > "$W/repoatom.xml"
+		out=$(python3 "$W/probe.py" x 0 atom "$W/repoatom.xml" 2>&1); rc=$?
+		expect "Atom $RP/atom.xml valid" atom '.*rc=0' "$out rc=$rc"
+		if have gg; then expect "Atom served as application/atom+xml" gg '^20 application/atom\+xml' "$(ggh "$U/atom.xml")"; fi
+	else
+		skip "feed checks" - "no client to fetch feeds"
+	fi
+else
+	skip "feed checks" python3 "python3 not available"
+fi
+
+# ================================================================= report ====
+echo
+printf '%-4s | %-46s | %-9s | %s\n' STAT CHECK CLIENT DETAIL
+printf '%s\n' "-----+------------------------------------------------+-----------+----------------------------------------"
+printf '%s\n' "${ROWS[@]}" | cut -c1-200
+echo
+echo "target: $U   pass=$PASS fail=$FAIL skip=$SKIP info=$INFO"
+tools=""
+for t in gg titan gemget openssl python3; do have $t && tools="$tools $t"; done
+pyhas feedparser && tools="$tools feedparser"; pyhas ignition && tools="$tools ignition"
+echo "tools:$tools"
+[ "$FAIL" -eq 0 ]

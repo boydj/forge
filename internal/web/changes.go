@@ -480,6 +480,10 @@ func (h *Handler) titanChanges(req *request, u *store.User, rc *repoCtx, rest []
 		}
 	case "edit":
 		if req.Titan.Edit {
+			if !(rc.acc.CanWrite() || ch.AuthorID == u.ID) {
+				_ = gemini.Forbidden(req.w, "not permitted")
+				return
+			}
 			_ = req.w.Header(gemini.StatusSuccess, "text/plain; charset=utf-8")
 			fmt.Fprintf(req.w, "%s\n\n%s\n", ch.Title, ch.Body)
 			return

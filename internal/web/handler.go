@@ -112,6 +112,10 @@ func (h *Handler) ServeGemini(ctx context.Context, w gemini.ResponseWriter, r *g
 		}
 		return
 	}
+	if !h.F.Config.ServesHost(r.URL.Hostname()) {
+		_ = w.Header(gemini.StatusProxyRequestRefused, "this server does not proxy requests for "+r.URL.Hostname())
+		return
+	}
 	path := r.Path()
 	if strings.Contains(path, "/./") || strings.Contains(path, "\x00") {
 		_ = gemini.BadRequest(w, "bad path")

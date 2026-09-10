@@ -227,9 +227,15 @@ func TestRegistrationAndKeys(t *testing.T) {
 	if status != 20 || !strings.Contains(body, "not registered") {
 		t.Fatalf("unknown cert: %d %s", status, body)
 	}
-	status, meta, _ := h.get(h.url("/account?%3F"), &cert, "")
+	status, meta, _ := h.get(h.url("/account?"), &cert, "")
 	if status != 10 {
+		t.Fatalf("expected input prompt for bare ?, got %d %s", status, meta)
+	}
+	if status, meta, _ := h.get(h.url("/account?%3F"), &cert, ""); status != 10 {
 		t.Fatalf("expected input prompt, got %d %s", status, meta)
+	}
+	if status, _, _ := h.get(strings.Replace(h.url("/"), "localhost", "evil.example", 1), nil, ""); status != 53 {
+		t.Errorf("foreign host: %d", status)
 	}
 	status, meta, _ = h.get(h.url("/account?Bad%20Name"), &cert, "")
 	if status != 10 || !strings.Contains(meta, "not available") {

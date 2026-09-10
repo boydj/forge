@@ -277,6 +277,13 @@ func (s *Server) handleConn(conn *tls.Conn) {
 	if err := rw.flush(); err != nil {
 		log.Debug("write failed", "remote", conn.RemoteAddr(), "err", err)
 	}
+	// Drain a bounded amount of an unread Titan body so that an early
+	// rejection is not turned into a TCP reset before the client has read
+	// the status line.
+	if cr, ok := req.Body.(*countingReader); ok && titan != nil && cr.N < titan.Size {
+		_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _ = io.CopyN(io.Discard, cr, min(titan.Size-cr.N, 256<<10))
+	}
 	// Send close_notify so strict clients see a clean EOF.
 	_ = conn.CloseWrite()
 	d := time.Since(start)

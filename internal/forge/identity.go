@@ -137,7 +137,7 @@ func (f *Forge) AddCertificate(ctx context.Context, u *store.User, id *Identity,
 	if err != nil {
 		return nil, err
 	}
-	f.Event(ctx, store.EventUserCertAdd, nil, u, "certificate added", "/account", nil)
+	f.Event(ctx, store.EventUserCertAdd, nil, u, u.Name+" added a certificate", "/~"+u.Name+"/", nil)
 	return c, nil
 }
 

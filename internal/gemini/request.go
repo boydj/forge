@@ -85,7 +85,7 @@ func parseRequestLine(line string) (*url.URL, *TitanParams, error) {
 		return nil, nil, ErrBadRequest
 	}
 	for _, c := range line {
-		if c < 0x20 || c == 0x7f {
+		if c <= 0x20 || c == 0x7f {
 			return nil, nil, ErrBadRequest
 		}
 	}

@@ -102,7 +102,7 @@ func (f *Forge) AddSSHKeys(ctx context.Context, u *store.User, text string) ([]*
 		added = append(added, stored)
 	}
 	if len(added) > 0 {
-		f.Event(ctx, store.EventUserKeyAdd, nil, u, "SSH key added", "/account/keys", nil)
+		f.Event(ctx, store.EventUserKeyAdd, nil, u, u.Name+" added an SSH key", "/~"+u.Name+"/", nil)
 	}
 	return added, nil
 }

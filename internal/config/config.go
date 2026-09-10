@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,6 +63,10 @@ type Gemini struct {
 	KeyFile  string `toml:"key_file"`
 	// Public port used in generated URLs when not 1965.
 	Port int `toml:"port"`
+	// ExtraHosts are additional hostnames served besides Hostname,
+	// "localhost" and IP literals (e.g. a node's own name). Requests for any
+	// other host are refused with status 53.
+	ExtraHosts []string `toml:"extra_hosts"`
 }
 
 // SSH configures the Git-over-SSH listener.
@@ -267,9 +272,29 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// ServesHost reports whether requests for host should be answered here.
+func (c *Config) ServesHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "" || host == strings.ToLower(c.Hostname) || host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		return true
+	}
+	for _, h := range c.Gemini.ExtraHosts {
+		if strings.EqualFold(h, host) {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate checks invariants.
 func (c *Config) Validate() error {
 	var errs []error
+	if len(c.HookSocket()) >= 100 {
+		errs = append(errs, fmt.Errorf("data_dir is too long for a Unix socket path (%d bytes; limit is about 100): use a shorter data_dir", len(c.HookSocket())))
+	}
 	if c.DataDir == "" {
 		errs = append(errs, errors.New("data_dir is required"))
 	}

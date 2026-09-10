@@ -257,6 +257,10 @@ func (h *Handler) titanIssues(req *request, u *store.User, rc *repoCtx, rest []s
 		_ = gemini.Redirect(req.w, issueHref(rc, is))
 	case rest[1] == "edit" && len(rest) == 2:
 		if req.Titan.Edit {
+			if !(rc.acc.CanWrite() || is.AuthorID == u.ID) {
+				_ = gemini.Forbidden(req.w, "not permitted")
+				return
+			}
 			_ = req.w.Header(gemini.StatusSuccess, "text/plain; charset=utf-8")
 			fmt.Fprintf(req.w, "%s\n\n%s\n", is.Title, is.Body)
 			return
@@ -284,6 +288,10 @@ func (h *Handler) titanIssues(req *request, u *store.User, rc *repoCtx, rest []s
 		switch rest[3] {
 		case "edit":
 			if req.Titan.Edit {
+				if !(rc.acc.CanWrite() || c.AuthorID == u.ID) {
+					_ = gemini.Forbidden(req.w, "not permitted")
+					return
+				}
 				_ = req.w.Header(gemini.StatusSuccess, "text/plain; charset=utf-8")
 				fmt.Fprintln(req.w, c.Body)
 				return

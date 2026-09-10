@@ -51,7 +51,7 @@ func (h *Handler) register(req *request, rest []string) {
 		return
 	}
 	q := req.Query()
-	if q == "" {
+	if q == "" && !req.URL.ForceQuery {
 		p := req.page("Register")
 		p.Textf("This certificate (%s) is not registered.", short(req.id.SPKI))
 		p.Blank()
@@ -63,6 +63,7 @@ func (h *Handler) register(req *request, rest []string) {
 		return
 	}
 	if q == "?" || strings.TrimSpace(q) == "" {
+		// A bare "?" (or "/account?" from the link above) starts the prompt.
 		_ = gemini.Input(req.w, "Choose a username (lowercase letters, digits, hyphens)")
 		return
 	}
