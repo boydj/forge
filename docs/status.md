@@ -1,12 +1,14 @@
 # Project status
 
-Updated: 2026-09-10
+Updated: 2026-09-10 (evening)
 
 ## Current milestone
 
-**M3 complete (issues, comments, changes/reviews, releases, settings over
-Titan). M5 replication code landed; M4 single-VPS deployment is prepared but
-waits on credentials.** Health/announcement control is being integrated.
+**M10-style hardening done for the software (security review remediated,
+failure injection, load smoke, real-client interoperability); M11 Mercurial
+prototype done; M4 single-VPS deployment and M6-M9 network milestones wait
+on operator actions (credentials, Vultr BGP approval, ROA, the /48
+decision).**
 
 ## Accomplished
 
@@ -32,6 +34,16 @@ waits on credentials.** Health/announcement control is being integrated.
 - Docs: development, titan, gemfeeds, vcs-interface, operations, tls,
   disaster-recovery, dogfooding, misfin, replication, review-workflow,
   git-ssh, self-hosting, secrets, costs, health.
+- Hardening: `docs/security-review.md` (25 findings, 21 remediated on main,
+  action tokens for every INPUT-driven write), 14 fuzz targets, failure
+  injection suite (`tests/failure_test.go`, 11 scenarios), load smoke test and
+  `tools/loadtest`, interoperability with gg/titan/gemget/ignition/feedparser
+  (`scripts/interop`, 78 checks), monitoring as code (`infra/monitoring`),
+  15 runbooks, release tooling, dependency review.
+- M11: `internal/vcs/hg` Mercurial adapter prototype (read paths, patches;
+  merges unsupported), `docs/mercurial.md`.
+- M6 prep: IRR/RPKI/PeeringDB desired state, Vultr LOA and BGP checklist,
+  `scripts/netcheck` drift checker, `docs/runbooks/network-bootstrap.md`.
 - Network: `infra/network/address-plan.yaml`, `scripts/netgen` (BIRD, WireGuard, DNS, nftables outputs), `scripts/bgp-announce`, BIRD configs validated with `bird -p` 2.14.
 - DNS: `infra/opentofu/modules/cloudflare-dns` validated with tofu 1.12.6.
 
@@ -59,6 +71,13 @@ None deployed. Local: `make run` serves gemini://localhost:1965/ and ssh://local
 
 ## Technical debt
 
+- Security review open items: SR-02 decrypted secrets on persistent disk
+  (tmpfs delivery in progress), SR-19a/b deploy sudo scope and first-deploy
+  TOFU (in progress), SR-24 informational.
+- Release asset files are not replicated between nodes (database rows are).
+- Forwarded Titan writes trust the replica's TLS verification of the client
+  certificate (documented in `docs/replication.md`).
+
 - Titan writes use certificate-only authorisation; the threat model proposed
   an additional single-use token. Deviation recorded in `docs/titan.md`
   (Titan uploads are explicit client actions, not link clicks; clients drop
@@ -80,8 +99,9 @@ None blocking application work. Items that will need the operator (batched, not 
 
 ## Next executable work
 
-1. Wire `internal/health` into `forge serve` and `forge admin pop drain|undrain`.
-2. Two-node integration test on the built binary (`tests/cluster_test.go`) and failure injection (M10 prep).
-3. Restore drill test (backup -> wipe -> restore -> verify).
-4. M4: `tofu plan/apply` for the dev environment once credentials and spend approval exist.
-5. M6: operator actions in `docs/network-readiness.md`; M7+ need BGP approval.
+1. Finish tmpfs secrets delivery and scoped sudo (infra agent).
+2. M4: `tofu plan/apply` for the dev environment once credentials and spend approval exist; then `scripts/deploy ewr1` and the runbook smoke test.
+3. M6/M7: operator actions in `docs/runbooks/network-bootstrap.md`; `scripts/netcheck --expect announced` after Vultr approval.
+4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).
+5. Dogfooding once M4 is live and backups verified (`docs/dogfooding.md`).
+6. Optional: push the repository to the configured `origin` (github.com/boydj/forge) on operator request.
