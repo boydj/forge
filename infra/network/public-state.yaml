@@ -1,0 +1,286 @@
+# Publicly observable state of AS215520 and its prefixes.
+# Read-only research snapshot; regenerate by re-running the queries in the `source` fields.
+# See docs/network-readiness.md for interpretation, readiness matrix, and actions.
+
+queried_at: "2026-09-10T04:05:00Z"
+queried_by: "forge M0 agent C (shell: whois, dig, curl, jq)"
+
+asn:
+  number: 215520
+  rir: RIPE NCC
+  as_block: "AS215130 - AS219547"
+  as_name: JOSH-BOYD
+  status: ASSIGNED
+  legacy: false
+  org: ORG-JB158-RIPE
+  sponsoring_org: ORG-ICL64-RIPE
+  admin_c: JB21841-RIPE
+  tech_c: JB21841-RIPE
+  abuse_c: ACRO55456-RIPE          # inherited from org
+  abuse_mailbox: abuse@unplanks.com
+  mnt_by: [RIPE-NCC-END-MNT, JOSHBOYD-MNT]
+  created: "2024-02-12T15:41:50Z"
+  last_modified: "2024-02-12T15:41:50Z"
+  remarks: []
+  import_export_declared:
+    - { peer_asn: 209735, holder: "Lagrange Cloud Technologies Limited", observed_today: false }
+    - { peer_asn: 207841, holder: "Inferno Communications Ltd", observed_today: false }
+  ripestat_holder: "JOSH-BOYD JOSHUA BOYD"
+  source:
+    - "https://rest.db.ripe.net/search.json?query-string=AS215520&flags=no-referenced&flags=no-filtering"
+    - "https://rdap.db.ripe.net/autnum/215520"
+    - "https://stat.ripe.net/data/as-overview/data.json?resource=AS215520"
+
+organisation:
+  handle: ORG-JB158-RIPE
+  name: JOSHUA BOYD
+  org_type: OTHER
+  country: US
+  address: "PMB 131, 43330 Junction Plz Ste 164, Ashburn, VA 20147"
+  email: abuse@unplanks.com
+  abuse_c: ACRO55456-RIPE
+  mnt_by: [JOSHBOYD-MNT, JOSHBOYD-SHARED-MNT]
+  mnt_ref: [JOSHBOYD-SHARED-MNT, INFERNO-MNT]
+  created: "2024-02-01T19:34:02Z"
+  last_modified: "2026-05-13T06:12:50Z"
+  source: "https://rest.db.ripe.net/search.json?query-string=ORG-JB158-RIPE&flags=no-referenced&flags=no-filtering"
+
+sponsoring_org:
+  handle: ORG-ICL64-RIPE
+  name: Inferno Communications Ltd
+  org_type: LIR
+  country: GB
+  reg_nr: "11502705"
+  noc_email: noc@inferno.net.uk
+  abuse_email: abuse@inferno.net.uk
+  sponsored_resource_abuse_role: { handle: ICA28-RIPE, abuse_mailbox: abuse-sponsor@inferno.net.uk }
+  phone: "+44 3337 999 999"
+  mntner: INFERNO-MNT
+  source: "https://rest.db.ripe.net/search.json?query-string=ORG-ICL64-RIPE&flags=no-referenced&flags=no-filtering"
+
+contacts:
+  person:
+    handle: JB21841-RIPE
+    name: Joshua Boyd
+    phone: "+15133750157"
+    address: "PMB 131, 43330 Junction Plz Ste 164, Ashburn, VA 20147"
+    source: "https://rest.db.ripe.net/search.json?query-string=JB21841-RIPE&flags=no-referenced&flags=no-filtering"
+  abuse_role:
+    handle: ACRO55456-RIPE
+    abuse_mailbox: abuse@unplanks.com
+    mailbox_domain_mx: [route1.mx.cloudflare.net, route2.mx.cloudflare.net, route3.mx.cloudflare.net]
+    source: "https://rest.db.ripe.net/search.json?query-string=ACRO55456-RIPE&flags=no-referenced&flags=no-filtering"
+  maintainers:
+    - { name: JOSHBOYD-MNT, auth: SSO, upd_to: boydjd@jbip.net, created: "2024-02-01T19:31:22Z" }
+    - { name: JOSHBOYD-SHARED-MNT, auth: SSO, upd_to: boydjd@jbip.net, created: "2024-02-01T19:31:54Z" }
+  maintainer_source: "https://rest.db.ripe.net/search.json?query-string=JOSHBOYD-MNT&flags=no-referenced&flags=no-filtering"
+
+prefixes:
+  ipv6:
+    prefix: "2a0f:85c1:368::/48"
+    rir: RIPE NCC
+    registration:
+      netname: JOSH-BOYD
+      status: ASSIGNED            # PA sub-assignment, not PI
+      parent: { prefix: "2a0f:85c0::/29", netname: UK-INFERNOLAN-20191115, status: ALLOCATED-BY-RIR, org: ORG-ICL64-RIPE }
+      country: GB
+      org: null
+      admin_c: JB21841-RIPE
+      tech_c: JB21841-RIPE
+      abuse_c: ICA28-RIPE
+      mnt_by: [INFERNO-MNT]
+      mnt_routes: [JOSHBOYD-MNT]
+      mnt_lower: []
+      mnt_domains: []
+      geofeed: null
+      created: "2024-02-09T17:03:46Z"
+      last_modified: "2024-03-16T18:23:05Z"
+      source: "https://rest.db.ripe.net/search.json?query-string=2a0f:85c1:368::/48&flags=all-less&flags=no-referenced"
+    routing:
+      announced: true
+      origin_asn: 215520
+      first_seen: "2024-02-16T08:00:00"
+      ris_peers_seeing: 320
+      ris_peers_total: 320
+      visibility_pct: 100
+      upstreams_observed:
+        - { asn: 835, holder: "GOCODEIT-EDGE - GoCodeIT Inc", paths: 352, of: 353 }
+        - { asn: 62513, holder: "GOCODEIT-INC - GoCodeIT Inc", paths: 1, of: 353 }
+      other_neighbours: [205794]
+      common_paths: ["6939 835 215520", "24482 6939 835 215520", "8218 6939 835 215520", "9002 3257 835 215520"]
+      source:
+        - "https://stat.ripe.net/data/routing-status/data.json?resource=AS215520"
+        - "https://stat.ripe.net/data/looking-glass/data.json?resource=2a0f:85c1:368::/48"
+        - "https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS215520"
+    rpki:
+      status: valid
+      roas:
+        - { prefix: "2a0f:85c1:368::/48", max_length: 48, asn: 215520, ta: "RIPE NCC RPKI Root" }
+      conflicting_roas: []
+      covering_roas_on_parent: []
+      rpki_client_chain_expires: "2026-09-10T21:04:27Z"   # manifest/CRL horizon, not ROA end date
+      source:
+        - "https://stat.ripe.net/data/rpki-validation/data.json?resource=AS215520&prefix=2a0f:85c1:368::/48"
+        - "https://stat.ripe.net/data/rpki-roas/data.json?resource=AS215520"
+        - "https://console.rpki-client.org/rpki.json"
+    irr:
+      objects:
+        - { db: RIPE, object: route6, origin: AS215520, mnt_by: [JOSHBOYD-MNT, JOSHBOYD-SHARED-MNT], created: "2024-02-17T01:09:13Z" }
+        - { db: RADB, object: route6, origin: AS215520, mnt_by: [MAINT-AS20473], descr: "Vultr Customer Route", last_modified: "2025-08-31T04:42:04Z" }
+      source: "whois -h whois.radb.net -- '-i origin AS215520'"
+    reverse_dns:
+      zone: "8.6.3.0.1.c.5.8.f.0.a.2.ip6.arpa"
+      delegated: false
+      dns_result: NXDOMAIN (SOA 0.a.2.ip6.arpa pri.authdns.ripe.net)
+      ripe_domain_object: null
+      who_can_create: INFERNO-MNT   # inet6num has no mnt-domains/mnt-lower
+      source:
+        - "dig NS 8.6.3.0.1.c.5.8.f.0.a.2.ip6.arpa @1.1.1.1"
+        - "https://rest.db.ripe.net/search.json?query-string=1.c.5.8.f.0.a.2.ip6.arpa&type-filter=domain&flags=all-more&flags=no-referenced"
+    blocklists:
+      spamhaus_dropv6: false
+      source: "https://www.spamhaus.org/drop/dropv6.txt"
+
+  ipv4:
+    prefix: "44.32.58.0/24"
+    rir: ARIN
+    registration:
+      holder_of_record: "Amateur Radio Digital Communications (ARDC)"
+      arin_parent: { handle: NET-44-0-0-0-1, name: AMPRNET, range: "44.0.0.0 - 44.191.255.255", type: "DIRECT ALLOCATION", registered: "1992-07-01", updated: "2024-11-07" }
+      per_prefix_rir_object: false        # the /24 exists only in ARDC's portal
+      allocation_type: "ARDC 44Net allocation to the operator (RADB descr KN4LJL)"
+      arin_contacts:
+        abuse: { handle: BURWE9-ARIN, email: john@ardc.net }
+        admin: { handle: ARDCA-ARIN, email: [rosy@ardc.net, noc@ardc.net, bdale@ardc.net] }
+        tech: { handle: LEWIS1112-ARIN, email: adam@ardc.net }
+      geofeed_url: "https://portal.ampr.org/storage/geofeed.csv"
+      geofeed_entry: "44.32.58.0/24,US,,,"
+      source:
+        - "https://rdap.arin.net/registry/ip/44.32.58.0/24"
+        - "whois -h whois.arin.net 'n 44.32.58.0'"
+        - "https://portal.ampr.org/storage/geofeed.csv"
+    routing:
+      announced: false
+      last_origin_asn: 215520
+      first_seen: "2024-03-30"
+      last_full_visibility_window_end: "2026-08-22"
+      last_withdrawal: "2026-08-27T15:26:17Z"
+      ris_peers_seeing: 1              # stale path only
+      ris_peers_total: 326
+      stale_path: { rrc: RRC16, location: "Miami, FL", peer: "198.32.243.133", peer_asn: 199524, as_path: "199524 12956 3257 20473 215520", last_updated: "2026-08-26T01:30:43Z" }
+      historical_upstreams: [{ asn: 20473, holder: "AS-VULTR - The Constant Company, LLC" }]
+      historical_common_paths: ["12779 7195 20473 215520", "25091 7195 20473 215520", "7195 20473 215520", "8218 6461 3356 20473 215520"]
+      covering_route: { prefix: "44.0.0.0/9", origin_asn: 7377, holder: "UCSD - University of California, San Diego" }
+      source:
+        - "https://stat.ripe.net/data/routing-status/data.json?resource=44.32.58.0/24"
+        - "https://stat.ripe.net/data/routing-history/data.json?resource=AS215520&min_peers=1"
+        - "https://stat.ripe.net/data/looking-glass/data.json?resource=44.32.58.0/24"
+        - "https://stat.ripe.net/data/bgp-updates/data.json?resource=44.32.58.0/24&starttime=2026-08-20T00:00:00&endtime=2026-09-10T00:00:00"
+        - "https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS215520"
+    rpki:
+      status: not-found
+      roas: []
+      conflicting_roas: []
+      covering_roas: []                # none for 44.0.0.0/8, /9, 44.32.0.0/16
+      who_can_create: "ARDC (ARIN hosted RPKI), via ARDC portal/support"
+      source:
+        - "https://stat.ripe.net/data/rpki-validation/data.json?resource=AS215520&prefix=44.32.58.0/24"
+        - "https://stat.ripe.net/data/rpki-roas/data.json?resource=44.0.0.0/8"
+        - "https://console.rpki-client.org/rpki.json"
+    irr:
+      objects:
+        - { db: RADB, object: route, origin: AS215520, mnt_by: [MAINT-ARDC], descr: KN4LJL, last_modified: "2026-04-17T20:28:15Z" }
+      source: "whois -h whois.radb.net -- '-i origin AS215520'"
+    reverse_dns:
+      zone: "58.32.44.in-addr.arpa"
+      delegated: false
+      dns_result: "NXDOMAIN (authoritative from ns.ardc.net; SOA 32.44.in-addr.arpa serial 2026090906)"
+      parent_zone_servers: [ns.ardc.net, ns2.us.ardc.net, ns1.de.ardc.net, a.gw4.uk]
+      who_can_create: "operator via ARDC portal; ARDC publishes NS"
+      source: "dig NS 58.32.44.in-addr.arpa @ns.ardc.net"
+    blocklists:
+      spamhaus_drop: false
+      spamhaus_asn_drop_as215520: false
+      source: ["https://www.spamhaus.org/drop/drop.txt", "https://www.spamhaus.org/drop/asndrop.json"]
+
+historical_prefixes_not_ours:
+  - prefix: "2a12:bec4:19a3::/48"
+    announced_by_as215520: "2025-05-12 to ~2025-06-04"
+    current_registration: { netname: Evolus-IX, org: ORG-EISG7-RIPE, route6_origin: AS215120 }
+    source: "https://stat.ripe.net/data/routing-history/data.json?resource=AS215520&min_peers=1"
+
+irr_as_set:
+  exists: false
+  checked: ["AS215520:AS-ALL", "AS-JOSHBOYD", "AS215520:AS-SET", "inverse members AS215520 in RIPE"]
+  source: "whois -h whois.radb.net AS215520:AS-ALL"
+
+peeringdb:
+  net_id: 35354
+  org_id: 37423
+  name: JOSHUA BOYD
+  website: "https://as215520.net"
+  irr_as_set: ""
+  info_type: "Educational/Research"
+  info_types: ["Educational/Research", "Network Services"]
+  info_prefixes4: 100
+  info_prefixes6: 100
+  info_scope: Global
+  info_ipv6: true
+  policy_general: Open
+  public_pocs: []
+  facilities: []
+  ixps:
+    - { name: "BGP.Exchange - London", ix_id: 3821, ipaddr4: null, ipaddr6: "2a0e:8f01:1000:10::102", speed_mbps: 1000, rs_peer: true }
+    - { name: ONIX, ix_id: 4059, ipaddr4: null, ipaddr6: "2001:504:125:e1::bba", speed_mbps: 100, rs_peer: true }
+    - { name: "BGP.Exchange - Toronto", ix_id: 4843, ipaddr4: null, ipaddr6: "2a0e:8f01:1000:33::12b", speed_mbps: 1000, rs_peer: true }
+  rir_status: ok
+  created: "2024-02-14T02:26:42Z"
+  updated: "2024-04-02T03:01:05Z"
+  source:
+    - "https://www.peeringdb.com/api/net?asn=215520"
+    - "https://www.peeringdb.com/api/netixlan?asn=215520"
+    - "https://www.peeringdb.com/api/org/37423"
+    - "https://www.peeringdb.com/api/poc?net_id=35354"
+
+dns:
+  domain: as215520.net
+  registrar: "NameCheap, Inc."
+  registered: "2024-02-15T14:12:50Z"
+  expires: "2027-02-15T14:12:50Z"
+  nameservers: [fay.ns.cloudflare.com, kip.ns.cloudflare.com]
+  on_cloudflare: true
+  dnssec: { zone_signed: true, ds_at_parent: false, algorithm: 13 }
+  records:
+    apex_a: [104.21.74.245, 172.67.207.242]
+    apex_aaaa: ["2606:4700:3033::6815:4af5", "2606:4700:3037::ac43:cff2"]
+    www: cloudflare-proxied
+    gemini: { a: [207.246.80.52], aaaa: ["2001:19f0:4000:3516:5400:6ff:fe9a:c207"], note: "Vultr-owned addresses, not in either prefix" }
+    git: null
+    nodes: null
+    mx: [route1.mx.cloudflare.net, route2.mx.cloudflare.net, route3.mx.cloudflare.net]
+    spf: "v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all"
+    dmarc: "v=DMARC1; p=none; rua=mailto:71d2cf86c9ed4b4c8c1f9e910b7e6a23@dmarc-reports.cloudflare.net"
+    caa: []
+    wildcard: false
+  source:
+    - "https://rdap.verisign.com/net/v1/domain/as215520.net"
+    - "dig @1.1.1.1 as215520.net NS/SOA/A/AAAA/MX/TXT/CAA/DNSKEY; dig DS as215520.net @a.gtld-servers.net"
+
+website:
+  url: "https://as215520.net"
+  served_by: cloudflare
+  last_modified: "2024-02-20T04:27:07Z"
+  declared_pops: ["Lagrange Cloud (London, UK)", "Xenyth Cloud (Toronto, CA)"]
+  declared_ixps: [ONIX]
+  source: "curl https://as215520.net/"
+
+third_party_views:
+  bgp_tools: { tags: ["Personal ASN", "IPv6 only"], upstreams: [835], peers: 27, source: "https://bgp.tools/as/215520" }
+  bgp_he_net: { source: "https://bgp.he.net/AS215520" }
+
+not_determined:
+  - "ARDC portal allocation details, LOA/ROA request state, DNS settings (login required; whois.ampr.org unreachable)"
+  - "PeeringDB POCs with non-public visibility"
+  - "ROA EE-certificate validity dates (visible only in the RIPE RPKI dashboard)"
+  - "Deliverability of abuse@unplanks.com beyond MX presence"
+  - "Reason for the 2026-08-27 withdrawal of 44.32.58.0/24"
