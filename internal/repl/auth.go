@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -33,10 +34,27 @@ func (n *Node) authenticate(r *http.Request) (string, error) {
 		return "", ErrUnauthorized
 	}
 	peer := r.Header.Get(headerNode)
-	if _, ok := n.opts.Peers[peer]; !ok {
+	addr, ok := n.opts.Peers[peer]
+	if !ok {
 		return "", fmt.Errorf("%w: %q", ErrUnknownPeer, peer)
 	}
+	// Bind the claimed node name to its configured control address so that
+	// a party holding the shared secret cannot impersonate another node
+	// from elsewhere on the mesh.
+	if want, _, err := net.SplitHostPort(addr); err == nil {
+		if got, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && !sameHost(want, got) {
+			return "", fmt.Errorf("%w: %q from %s, expected %s", ErrUnknownPeer, peer, got, want)
+		}
+	}
 	return peer, nil
+}
+
+func sameHost(a, b string) bool {
+	ia, ib := net.ParseIP(a), net.ParseIP(b)
+	if ia != nil && ib != nil {
+		return ia.Equal(ib)
+	}
+	return strings.EqualFold(a, b)
 }
 
 // withAuth wraps a handler with authentication; the peer name is stored in

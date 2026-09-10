@@ -835,3 +835,9 @@ Static / supply chain (CI):
   client action, never a link click, and the affected clients drop URL
   parameters from links anyway. State changes reachable over plain Gemini
   require an INPUT-typed confirmation. Revisit if abuse is observed.
+- 2026-09-10 (security review SR-01): INPUT-driven state changes require a
+  per-identity action token in the path (`docs/titan.md`, "Action tokens");
+  the earlier "typed confirmation" mitigation was insufficient because links
+  can pre-fill queries. Invariant I-20 amended: README links are emitted with
+  a `[readme link]` marker and repository gemtext is served raw as
+  `text/plain`.

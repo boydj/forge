@@ -186,6 +186,11 @@ func (f *Forge) postReceive(ctx context.Context, req *hooks.Request, r *store.Re
 }
 
 func (f *Forge) countCommits(ctx context.Context, repo vcs.Repository, old, new string) int {
+	if old != "" {
+		if n, err := repo.CountCommits(ctx, vcs.RevisionID(old), vcs.RevisionID(new)); err == nil {
+			return n
+		}
+	}
 	n := 0
 	limit := 1000
 	for skip := 0; ; skip += limit {
@@ -199,7 +204,7 @@ func (f *Forge) countCommits(ctx context.Context, repo vcs.Repository, old, new 
 			}
 			n++
 		}
-		if len(revs) < limit || old == "" {
+		if len(revs) < limit || old == "" || skip >= 20000 {
 			return n
 		}
 	}

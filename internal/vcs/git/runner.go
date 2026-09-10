@@ -118,7 +118,7 @@ func (b *Backend) Env(extra ...string) []string {
 		{"protocol.version", "2"},
 		{"protocol.allow", "never"},
 		{"protocol.ssh.allow", "never"},
-		{"protocol.file.allow", "always"},
+		{"protocol.file.allow", "user"},
 		{"protocol.ext.allow", "never"},
 		{"safe.directory", "*"},
 		{"advice.detachedHead", "false"},
@@ -323,7 +323,7 @@ func (b *Backend) Fetch(ctx context.Context, path, remoteURL string) error {
 	}
 	defer release()
 	cmd := b.Command(ctx, path, "fetch", "--quiet", "--prune", "--no-tags", "--no-write-fetch-head",
-		"--", remoteURL, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+		"--", remoteURL, "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*", "+refs/changes/*:refs/changes/*")
 	var stderr bytes.Buffer
 	cmd.Stderr = &limitedWriter{w: &stderr, max: 64 << 10}
 	if err := cmd.Run(); err != nil {

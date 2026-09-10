@@ -5,13 +5,22 @@ package web
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"as215520.net/forge/internal/config"
 	"as215520.net/forge/internal/forge"
 	"as215520.net/forge/internal/gemini"
 	"as215520.net/forge/internal/store"
@@ -30,11 +39,34 @@ type Handler struct {
 	Forwarder Forwarder
 
 	limiter rateLimiter
+	secret  []byte
 }
 
 // Forwarder is implemented by the replication node.
 type Forwarder interface {
 	Forward(ctx context.Context, leaderNode, path, mime string, body, certDER []byte) (status int, meta string, err error)
+}
+
+// ipKey hashes a remote address into the limiter key space (negative keys
+// never collide with user ids).
+func ipKey(a net.Addr) int64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(ipOf(a)))
+	return -int64(h.Sum64() >> 1)
+}
+
+func ipOf(a net.Addr) string {
+	if a == nil {
+		return ""
+	}
+	if t, ok := a.(*net.TCPAddr); ok {
+		return t.IP.String()
+	}
+	host, _, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return a.String()
+	}
+	return host
 }
 
 // rateLimiter is a per-user sliding one-minute window for Titan writes.
@@ -86,6 +118,10 @@ type request struct {
 	// pending is set by page(): the success header is written by send(), so
 	// a handler that fails after starting a page can still answer 4x/5x.
 	pending bool
+	// actionOK is set when the request carried a valid action token
+	// (/_/<token>/...): the query was typed by the user at an INPUT prompt
+	// served by us, not pre-filled by a link (see action()).
+	actionOK bool
 }
 
 // New returns a handler.
@@ -93,7 +129,94 @@ func New(f *forge.Forge, log *slog.Logger) *Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Handler{F: f, Log: log, Started: time.Now()}
+	h := &Handler{F: f, Log: log, Started: time.Now()}
+	secret, err := loadActionSecret(f.Config)
+	if err != nil {
+		log.Error("action secret", "err", err)
+		secret = make([]byte, 32)
+		_, _ = rand.Read(secret)
+	}
+	h.secret = secret
+	return h
+}
+
+// loadActionSecret returns the HMAC key for action tokens: the cluster
+// secret when clustered (tokens must verify on every node behind anycast),
+// otherwise a per-node secret generated once under the data directory.
+func loadActionSecret(cfg *config.Config) ([]byte, error) {
+	if cfg.Cluster.Enabled && cfg.Cluster.SecretFile != "" {
+		b, err := os.ReadFile(cfg.Cluster.SecretFile)
+		if err != nil {
+			return nil, err
+		}
+		return []byte(strings.TrimSpace(string(b))), nil
+	}
+	path := filepath.Join(cfg.DataDir, "action.secret")
+	if b, err := os.ReadFile(path); err == nil && len(b) >= 16 {
+		return b, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o750); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// actionIdentity names the party consenting: the account id, or the
+// certificate key before an account exists.
+func (req *request) actionIdentity() string {
+	if req.id != nil && req.id.User != nil {
+		return fmt.Sprintf("u%d", req.id.User.ID)
+	}
+	return "c" + req.Fingerprint
+}
+
+func (h *Handler) actionToken(identity, path string, day time.Time) string {
+	mac := hmac.New(sha256.New, h.secret)
+	fmt.Fprintf(mac, "%s\n%s\n%s", day.UTC().Format("2006-01-02"), identity, path)
+	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+func (h *Handler) verifyAction(identity, path, tok string) bool {
+	now := time.Now()
+	for _, d := range []time.Time{now, now.Add(-24 * time.Hour)} {
+		if hmac.Equal([]byte(h.actionToken(identity, path, d)), []byte(tok)) {
+			return true
+		}
+	}
+	return false
+}
+
+// action gates a query-driven state change. Without a valid token in the
+// path the request is redirected to the tokenised path with the query
+// dropped, which forces the INPUT prompt: a link cannot pre-fill the value.
+// With the token and no query it prompts; with both it returns the value.
+func (req *request) action(h *Handler, prompt string, sensitive bool) (string, bool) {
+	if req.Certificate == nil {
+		_ = gemini.CertRequired(req.w, "a client certificate identifies you")
+		return "", false
+	}
+	if !req.actionOK {
+		tok := h.actionToken(req.actionIdentity(), req.URL.Path, time.Now())
+		_ = gemini.Redirect(req.w, "/_/"+tok+req.URL.Path)
+		return "", false
+	}
+	q := strings.TrimSpace(req.Query())
+	if q == "" && !req.URL.ForceQuery {
+		if sensitive {
+			_ = req.w.Header(gemini.StatusSensitiveInput, prompt)
+		} else {
+			_ = gemini.Input(req.w, prompt)
+		}
+		return "", false
+	}
+	return q, true
 }
 
 // ServeGemini implements gemini.Handler.
@@ -120,11 +243,30 @@ func (h *Handler) ServeGemini(ctx context.Context, w gemini.ResponseWriter, r *g
 		return
 	}
 	path := r.Path()
-	if strings.Contains(path, "/./") || strings.Contains(path, "\x00") {
+	for _, c := range path {
+		if c < 0x20 || c == 0x7f {
+			_ = gemini.BadRequest(w, "bad path")
+			return
+		}
+	}
+	if strings.Contains(path, "/./") {
 		_ = gemini.BadRequest(w, "bad path")
 		return
 	}
 	req.segs = splitPath(path)
+	if len(req.segs) >= 2 && req.segs[0] == "_" {
+		rest := "/" + strings.Join(req.segs[2:], "/")
+		if strings.HasSuffix(path, "/") && rest != "/" {
+			rest += "/"
+		}
+		if !h.verifyAction(req.actionIdentity(), rest, req.segs[1]) {
+			_ = gemini.Redirect(w, rest)
+			return
+		}
+		req.actionOK = true
+		r.URL.Path = rest
+		req.segs = req.segs[2:]
+	}
 	if r.IsTitan() {
 		h.serveTitan(req)
 		return

@@ -199,7 +199,7 @@ func (n *Node) fetchRepo(ctx context.Context, rp *store.Repo, leaderAddr string)
 	}
 	defer release()
 	cmd := n.opts.Git.Command(ctx, path, "fetch", "--quiet", "--prune", "--no-tags", "--no-write-fetch-head",
-		"--", gitURL(leaderAddr, rp.Owner, rp.Name), "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*")
+		"--", gitURL(leaderAddr, rp.Owner, rp.Name), "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*", "+refs/changes/*:refs/changes/*")
 	cmd.Env = withGitConfig(cmd.Env,
 		[2]string{"protocol.http.allow", "always"},
 		[2]string{"http.followRedirects", "false"},

@@ -332,3 +332,22 @@ func (s *Store) CommentVersion(ctx context.Context, id int64) (int, error) {
 	err := s.db.QueryRowContext(ctx, `SELECT version FROM comments WHERE id = ?`, id).Scan(&v)
 	return v, err
 }
+
+// StaleClosedChanges lists closed (not merged) changes closed before cutoff
+// whose refs may be pruned. Merged changes keep their refs.
+func (s *Store) StaleClosedChanges(ctx context.Context, cutoff time.Time) ([]*Change, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+changeCols+changeFrom+`WHERE c.state = 'closed' AND c.closed_at IS NOT NULL AND c.closed_at < ? ORDER BY c.id`, cutoff.UTC().Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Change
+	for rows.Next() {
+		ch, err := scanChange(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ch)
+	}
+	return out, rows.Err()
+}

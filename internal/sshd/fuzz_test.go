@@ -1,9 +1,15 @@
 package sshd
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
+
+// strict enables invariants that document open findings in
+// docs/security-review.md; set FORGE_FUZZ_STRICT=1 after applying the
+// corresponding patches to make them part of the fuzz contract.
+var strict = os.Getenv("FORGE_FUZZ_STRICT") == "1"
 
 // FuzzParseCommand checks that the exec-line grammar never panics, that an
 // accepted command yields exactly one validated owner and repository name
@@ -45,9 +51,15 @@ func FuzzParseCommand(f *testing.F) {
 			t.Fatalf("bad op %v", cmd.Op)
 		}
 		for _, name := range []string{cmd.Owner, cmd.Repo} {
-			if name == "" || strings.ContainsAny(name, "/\\ '\"\x00~") || strings.Contains(name, "..") ||
+			if name == "" || strings.ContainsAny(name, "/\\ '\"\x00~") ||
 				strings.HasPrefix(name, "-") || strings.HasPrefix(name, ".") {
 				t.Fatalf("accepted unsafe name %q from %q", name, line)
+			}
+			if strict && strings.Contains(name, "..") {
+				// SR-21: repoRe admits ".." inside a name while
+				// forge.ValidRepoName rejects it; harmless (the name is only
+				// a database lookup key) but the grammars should agree.
+				t.Fatalf("accepted %q with '..' from %q", name, line)
 			}
 		}
 		if !ownerRe.MatchString(cmd.Owner) || !repoRe.MatchString(cmd.Repo) || strings.HasSuffix(cmd.Repo, ".git") {

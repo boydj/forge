@@ -50,21 +50,23 @@ func (h *Handler) register(req *request, rest []string) {
 		h.enrol(req)
 		return
 	}
-	q := req.Query()
-	if q == "" && !req.URL.ForceQuery {
+	if len(rest) == 0 {
 		p := req.page("Register")
 		p.Textf("This certificate (%s) is not registered.", short(req.id.SPKI))
 		p.Blank()
-		p.Link("/account?", "Create a new account with this certificate")
+		p.Link("/account/register", "Create a new account with this certificate")
 		p.Link("/account/enrol", "Add this certificate to an existing account with an enrolment code")
 		p.Blank()
 		p.Text("Tip: create the identity for the whole site (not only this page) so it is sent for every path.")
 		req.send(p)
 		return
 	}
-	if q == "?" || strings.TrimSpace(q) == "" {
-		// A bare "?" (or "/account?" from the link above) starts the prompt.
-		_ = gemini.Input(req.w, "Choose a username (lowercase letters, digits, hyphens)")
+	if rest[0] != "register" {
+		_ = gemini.Forbidden(req.w, "this certificate is not registered; visit /account to register")
+		return
+	}
+	q, ok := req.action(h, "Choose a username (lowercase letters, digits, hyphens)", false)
+	if !ok {
 		return
 	}
 	u, err := h.F.Register(req.ctx, req.id, q)
@@ -85,9 +87,12 @@ func (h *Handler) register(req *request, rest []string) {
 }
 
 func (h *Handler) enrol(req *request) {
-	code := req.Query()
-	if code == "" {
-		_ = req.w.Header(gemini.StatusSensitiveInput, "Enter the enrolment code generated from your existing device")
+	code, ok := req.action(h, "Enter the enrolment code generated from your existing device", true)
+	if !ok {
+		return
+	}
+	if !h.limiter.allow(ipKey(req.RemoteAddr), 10) {
+		_ = req.w.Header(gemini.StatusSlowDown, "too many enrolment attempts; wait a minute")
 		return
 	}
 	tok, err := h.F.Store.ConsumeToken(req.ctx, "enrol", forge.HashToken(code))
@@ -128,10 +133,12 @@ func (h *Handler) accountPage(req *request, u *store.User) {
 }
 
 func (h *Handler) accountProfile(req *request, u *store.User) {
-	q := req.Query()
-	if q == "" {
-		_ = gemini.Input(req.w, "Display name and bio separated by ' | ' (leave empty to clear)")
+	q, ok := req.action(h, "Display name and bio separated by ' | ' (type '-' to clear)", false)
+	if !ok {
 		return
+	}
+	if q == "-" {
+		q = ""
 	}
 	display, bio, _ := strings.Cut(q, "|")
 	display, bio = strings.TrimSpace(display), strings.TrimSpace(bio)
@@ -148,8 +155,12 @@ func (h *Handler) accountProfile(req *request, u *store.User) {
 
 func (h *Handler) accountKeys(req *request, u *store.User, rest []string) {
 	if len(rest) == 2 && rest[0] == "remove" {
-		if !strings.EqualFold(strings.TrimSpace(req.Query()), "remove") {
-			_ = gemini.Input(req.w, "Type \"remove\" to delete this SSH key")
+		q, ok := req.action(h, "Type \"remove\" to delete this SSH key", false)
+		if !ok {
+			return
+		}
+		if !strings.EqualFold(q, "remove") {
+			_ = gemini.Input(req.w, "Not confirmed. Type \"remove\" to delete this SSH key")
 			return
 		}
 		if err := h.F.RemoveSSHKey(req.ctx, u, "SHA256:"+rest[1]); err != nil {
@@ -160,9 +171,8 @@ func (h *Handler) accountKeys(req *request, u *store.User, rest []string) {
 		return
 	}
 	if len(rest) == 1 && rest[0] == "add" {
-		q := req.Query()
-		if q == "" {
-			_ = gemini.Input(req.w, "Paste one SSH public key (authorized_keys format)")
+		q, ok := req.action(h, "Paste one SSH public key (authorized_keys format)", false)
+		if !ok {
 			return
 		}
 		if _, err := h.F.AddSSHKeys(req.ctx, u, q); err != nil {
@@ -221,7 +231,7 @@ func (h *Handler) hostKeyLine() string { return HostKeyLine }
 func (h *Handler) accountCerts(req *request, u *store.User, rest []string) {
 	if len(rest) == 1 && rest[0] == "enrol-code" {
 		// Generate a one-time code to enrol another device.
-		var b [8]byte
+		var b [16]byte
 		if _, err := rand.Read(b[:]); err != nil {
 			req.fail(err)
 			return
@@ -247,8 +257,12 @@ func (h *Handler) accountCerts(req *request, u *store.User, rest []string) {
 					_ = gemini.BadRequest(req.w, "cannot revoke the certificate in use; do it from another device")
 					return
 				}
-				if !strings.EqualFold(strings.TrimSpace(req.Query()), "revoke") {
-					_ = gemini.Input(req.w, "Type \"revoke\" to revoke this certificate")
+				q, ok := req.action(h, "Type \"revoke\" to revoke this certificate", false)
+				if !ok {
+					return
+				}
+				if !strings.EqualFold(q, "revoke") {
+					_ = gemini.Input(req.w, "Not confirmed. Type \"revoke\" to revoke this certificate")
 					return
 				}
 				if err := h.F.Store.RevokeCertificate(req.ctx, c.ID); err != nil {

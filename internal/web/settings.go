@@ -34,7 +34,25 @@ func (h *Handler) repoSettings(req *request, rc *repoCtx, rest []string) {
 		h.settingsPage(req, rc)
 		return
 	}
-	q := strings.TrimSpace(req.Query())
+	prompts := map[string]string{
+		"description": "Description (one line; type '-' to clear)",
+		"visibility":  "Type \"public\" or \"private\"",
+		"archive":     "Type \"archive\" to make the repository read-only, or \"unarchive\"",
+		"branch":      "Default branch name",
+		"delete":      fmt.Sprintf("Type \"%s/%s\" to delete this repository (restorable by an administrator for %s)", r.Owner, r.Name, forge.DeleteRetention),
+	}
+	prompt := prompts[rest[0]]
+	if rest[0] == "collaborators" && len(rest) == 2 {
+		prompt = map[string]string{"add": "Username and role, e.g. \"bob write\" (roles: read, write, admin)", "remove": "Username to remove"}[rest[1]]
+	}
+	if prompt == "" {
+		_ = gemini.NotFound(req.w)
+		return
+	}
+	q, ok := req.action(h, prompt, false)
+	if !ok {
+		return
+	}
 	done := func(err error) {
 		if err != nil {
 			req.fail(err)
@@ -44,30 +62,25 @@ func (h *Handler) repoSettings(req *request, rc *repoCtx, rest []string) {
 	}
 	switch rest[0] {
 	case "description":
-		if q == "" && req.URL.RawQuery == "" {
-			_ = gemini.Input(req.w, "Description (one line; leave empty to clear)")
-			return
+		if q == "-" {
+			q = ""
 		}
 		done(h.F.UpdateRepo(req.ctx, u, r, forge.UpdateRepoOptions{Description: &q}))
 	case "visibility":
 		if q != "public" && q != "private" {
-			_ = gemini.Input(req.w, "Type \"public\" or \"private\"")
+			_ = gemini.Input(req.w, "Not understood. Type \"public\" or \"private\"")
 			return
 		}
 		priv := q == "private"
 		done(h.F.UpdateRepo(req.ctx, u, r, forge.UpdateRepoOptions{Private: &priv}))
 	case "archive":
 		if q != "archive" && q != "unarchive" {
-			_ = gemini.Input(req.w, "Type \"archive\" to make the repository read-only, or \"unarchive\"")
+			_ = gemini.Input(req.w, "Not understood. Type \"archive\" or \"unarchive\"")
 			return
 		}
 		arch := q == "archive"
 		done(h.F.UpdateRepo(req.ctx, u, r, forge.UpdateRepoOptions{Archived: &arch}))
 	case "branch":
-		if q == "" {
-			_ = gemini.Input(req.w, "Default branch name")
-			return
-		}
 		done(h.F.UpdateRepo(req.ctx, u, r, forge.UpdateRepoOptions{DefaultBranch: &q}))
 	case "collaborators":
 		if len(rest) != 2 {
@@ -78,24 +91,16 @@ func (h *Handler) repoSettings(req *request, rc *repoCtx, rest []string) {
 		case "add":
 			name, role, _ := strings.Cut(q, " ")
 			if name == "" || (role != "read" && role != "write" && role != "admin") {
-				_ = gemini.Input(req.w, "Username and role, e.g. \"bob write\" (roles: read, write, admin)")
+				_ = gemini.Input(req.w, "Not understood. Username and role, e.g. \"bob write\" (roles: read, write, admin)")
 				return
 			}
 			done(h.F.SetCollaborator(req.ctx, u, r, name, store.Role(role)))
 		case "remove":
-			if q == "" {
-				_ = gemini.Input(req.w, "Username to remove")
-				return
-			}
 			done(h.F.SetCollaborator(req.ctx, u, r, q, store.RoleNone))
 		default:
 			_ = gemini.NotFound(req.w)
 		}
 	case "delete":
-		if q == "" {
-			_ = gemini.Input(req.w, fmt.Sprintf("Type \"%s/%s\" to delete this repository (restorable by an administrator for %s)", r.Owner, r.Name, forge.DeleteRetention))
-			return
-		}
 		if err := h.F.DeleteRepo(req.ctx, u, r, q); err != nil {
 			if err == forge.ErrNotAcceptable {
 				_ = gemini.Input(req.w, fmt.Sprintf("Name did not match. Type \"%s/%s\" to delete", r.Owner, r.Name))

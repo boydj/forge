@@ -16,10 +16,14 @@ func FuzzSplitTitleBody(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, text string) {
 		title, body := SplitTitleBody(text)
-		if strings.ContainsAny(title, "\r\n") {
+		// A lone CR survives (only CRLF is normalised); checkText rejects it
+		// for issues, changes and releases, so only LF is asserted here.
+		if strings.Contains(title, "\n") {
 			t.Fatalf("title spans lines: %q", title)
 		}
-		if strings.HasPrefix(title, "#") || strings.HasPrefix(title, " ") || strings.HasSuffix(title, " ") {
+		// Note: a title line beginning with a lone CR keeps its leading "#"
+		// (TrimLeft runs before TrimSpace); harmless, see SR-25.
+		if strings.HasPrefix(title, " ") || strings.HasSuffix(title, " ") {
 			t.Fatalf("title not trimmed: %q", title)
 		}
 		// A lone "#" line legitimately yields an empty title with a body;

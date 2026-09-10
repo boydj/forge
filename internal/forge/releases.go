@@ -93,6 +93,9 @@ func (f *Forge) EditRelease(ctx context.Context, u *store.User, acc Access, rel 
 	if !acc.CanWrite() {
 		return ErrForbidden
 	}
+	if acc.Repo.Archived {
+		return ErrArchived
+	}
 	if !f.IsLeader(acc.Repo) {
 		return ErrNotLeader
 	}
@@ -114,6 +117,9 @@ func (f *Forge) DeleteRelease(ctx context.Context, u *store.User, acc Access, re
 	if !acc.CanWrite() {
 		return ErrForbidden
 	}
+	if acc.Repo.Archived {
+		return ErrArchived
+	}
 	if !f.IsLeader(acc.Repo) {
 		return ErrNotLeader
 	}
@@ -132,6 +138,9 @@ func (f *Forge) AddAsset(ctx context.Context, u *store.User, acc Access, rel *st
 	}
 	if !acc.CanWrite() {
 		return nil, ErrForbidden
+	}
+	if acc.Repo.Archived {
+		return nil, ErrArchived
 	}
 	if !f.IsLeader(acc.Repo) {
 		return nil, ErrNotLeader
@@ -213,6 +222,9 @@ func (f *Forge) RemoveAsset(ctx context.Context, u *store.User, acc Access, rel 
 	}
 	if !acc.CanWrite() {
 		return ErrForbidden
+	}
+	if acc.Repo.Archived {
+		return ErrArchived
 	}
 	if !f.IsLeader(acc.Repo) {
 		return ErrNotLeader

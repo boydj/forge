@@ -29,14 +29,18 @@ func (a sshAuth) AuthenticateKey(ctx context.Context, key ssh.PublicKey) (*sshd.
 	if err != nil {
 		return nil, sshd.ErrUnknownKey
 	}
-	_ = a.f.Store.TouchSSHKey(ctx, k.ID)
-	return &sshd.Account{ID: u.ID, Name: u.Name}, nil
+	return &sshd.Account{ID: u.ID, Name: u.Name, Fingerprint: k.Fingerprint}, nil
 }
 
 func (a sshAuth) Authorize(ctx context.Context, acct *sshd.Account, owner, repo string, op sshd.Op) (string, error) {
 	u, err := a.f.Store.UserByID(ctx, acct.ID)
 	if err != nil || u.Disabled {
 		return "", sshd.ErrNoRepo
+	}
+	// Authorize runs after signature verification; the key callback runs for
+	// unverified queries too, so last-used is stamped here.
+	if k, err := a.f.Store.SSHKeyByFingerprint(ctx, acct.Fingerprint); err == nil {
+		_ = a.f.Store.TouchSSHKey(ctx, k.ID)
 	}
 	acc, err := a.f.LookupRepo(ctx, u, owner, repo)
 	if err != nil {

@@ -28,15 +28,20 @@ func SplitTitleBody(text string) (string, string) {
 	if i == len(lines) {
 		return "", ""
 	}
-	title := strings.TrimSpace(strings.TrimLeft(lines[i], "# "))
+	title := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(strings.ReplaceAll(lines[i], "\r", "")), "# "))
 	body := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
 	return title, body
 }
 
 // checkText validates user text against limits and encoding.
 func (f *Forge) checkText(title, body string) error {
-	if title != "" && (utf8.RuneCountInString(title) > MaxTitleLen || strings.ContainsAny(title, "\r\n")) {
+	if title != "" && utf8.RuneCountInString(title) > MaxTitleLen {
 		return ErrTooLarge
+	}
+	for _, r := range title {
+		if r < 0x20 || r == 0x7f {
+			return ErrNotAcceptable
+		}
 	}
 	if int64(len(body)) > f.Config.Limits.MaxTextBytes {
 		return ErrTooLarge
@@ -94,6 +99,9 @@ func (f *Forge) EditIssue(ctx context.Context, u *store.User, acc Access, is *st
 	if !canManageIssue(u, acc, is) {
 		return ErrForbidden
 	}
+	if acc.Repo.Archived {
+		return ErrArchived
+	}
 	if !f.IsLeader(acc.Repo) {
 		return ErrNotLeader
 	}
@@ -125,6 +133,8 @@ func (f *Forge) SetIssueState(ctx context.Context, u *store.User, acc Access, is
 	state, kind, verb := "open", store.EventIssueReopen, "reopened"
 	if closed {
 		state, kind, verb = "closed", store.EventIssueClose, "closed"
+	} else if acc.Repo.Archived {
+		return ErrArchived
 	}
 	if is.State == state {
 		return nil
@@ -171,8 +181,11 @@ func (f *Forge) EditComment(ctx context.Context, u *store.User, acc Access, c *s
 	if u == nil {
 		return ErrAuthRequired
 	}
-	if c.AuthorID != u.ID && !acc.CanWrite() {
+	if c.AuthorID != u.ID && !acc.CanAdmin() {
 		return ErrForbidden
+	}
+	if acc.Repo.Archived {
+		return ErrArchived
 	}
 	body := strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
 	if body == "" {
@@ -189,8 +202,11 @@ func (f *Forge) DeleteComment(ctx context.Context, u *store.User, acc Access, c 
 	if u == nil {
 		return ErrAuthRequired
 	}
-	if c.AuthorID != u.ID && !acc.CanWrite() {
+	if c.AuthorID != u.ID && !acc.CanAdmin() {
 		return ErrForbidden
+	}
+	if acc.Repo.Archived {
+		return ErrArchived
 	}
 	return f.Store.DeleteComment(ctx, c.ID)
 }

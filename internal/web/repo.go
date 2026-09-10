@@ -467,8 +467,11 @@ func (h *Handler) repoRaw(req *request, rc *repoCtx, segs []string) {
 			ctype += "; charset=utf-8"
 		}
 	}
+	// Repository gemtext is never served as text/gemini: user-authored link
+	// lines would render unmarked (threat model T-24). Rendered views mark
+	// links; raw is plain text.
 	if strings.HasSuffix(subpath, ".gmi") || strings.HasSuffix(subpath, ".gemini") {
-		ctype = "text/gemini; charset=utf-8"
+		ctype = "text/plain; charset=utf-8"
 	}
 	_ = req.w.Header(gemini.StatusSuccess, ctype)
 	_, _ = req.w.Write(head)

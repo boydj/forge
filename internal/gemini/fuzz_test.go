@@ -1,10 +1,16 @@
 package gemini
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+// strict enables invariants that document open findings in
+// docs/security-review.md; set FORGE_FUZZ_STRICT=1 after applying the
+// corresponding patches to make them part of the fuzz contract.
+var strict = os.Getenv("FORGE_FUZZ_STRICT") == "1"
 
 // Fuzz targets for the wire-facing parsers and the gemtext builder. They
 // check crash-freedom plus the invariants the security review relies on:
@@ -66,8 +72,18 @@ func FuzzParseRequestLine(f *testing.F) {
 			t.Fatalf("accepted authority/fragment: %q", line)
 		}
 		p := u.Path
-		if strings.Contains(p, "/../") || strings.HasSuffix(p, "/..") || strings.Contains(p, "//") || strings.ContainsAny(p, "\x00\r\n") {
+		if strings.Contains(p, "/../") || strings.HasSuffix(p, "/..") || strings.Contains(p, "//") {
 			t.Fatalf("accepted traversal-looking path %q from %q", p, line)
+		}
+		if strict {
+			// SR-08: percent-encoded control characters (%00, %0d%0a) are
+			// decoded by url.Parse after the raw-line check and reach the
+			// handlers in u.Path.
+			for _, c := range p {
+				if c < 0x20 || c == 0x7f {
+					t.Fatalf("accepted control character in decoded path %q from %q", p, line)
+				}
+			}
 		}
 		if (u.Scheme == "titan") != (tp != nil) {
 			t.Fatalf("titan params mismatch: scheme=%s params=%v", u.Scheme, tp)

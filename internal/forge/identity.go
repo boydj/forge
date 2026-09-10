@@ -153,7 +153,7 @@ func HashToken(code string) string {
 // NewEnrolmentCode creates a one-time code allowing another certificate to
 // be added to the account.
 func NewEnrolmentCode(ctx context.Context, f *Forge, u *store.User) (string, error) {
-	var b [8]byte
+	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err
 	}

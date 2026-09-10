@@ -27,6 +27,8 @@ import (
 type Account struct {
 	ID   int64
 	Name string
+	// Fingerprint is the SHA256 fingerprint of the key used to authenticate.
+	Fingerprint string
 }
 
 // ErrUnknownKey is returned by an Authenticator for a key that is not
@@ -269,7 +271,7 @@ func accountFromPermissions(p *ssh.Permissions) (*Account, string, bool) {
 	if err != nil {
 		return nil, "", false
 	}
-	return &Account{ID: id, Name: p.Extensions[extAccountName]}, p.Extensions[extFingerprint], true
+	return &Account{ID: id, Name: p.Extensions[extAccountName], Fingerprint: p.Extensions[extFingerprint]}, p.Extensions[extFingerprint], true
 }
 
 // Serve accepts connections on l until Shutdown or a fatal accept error.

@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,6 +114,23 @@ func (h *harness) get(rawurl string, cert *tls.Certificate, body string) (int, s
 	return status, meta, string(rest)
 }
 
+// act performs a query-driven action: it requests path, follows the action
+// token redirect, and resends with value as the INPUT answer. It returns the
+// final status/meta/body.
+func (h *harness) act(path string, cert *tls.Certificate, value string) (int, string, string) {
+	h.t.Helper()
+	status, meta, body := h.get(h.url(path), cert, "")
+	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+		return status, meta, body
+	}
+	tokPath := meta
+	status, meta, body = h.get(h.url(tokPath), cert, "")
+	if status != 10 && status != 11 {
+		return status, meta, body
+	}
+	return h.get(h.url(tokPath+"?"+url.QueryEscape(value)), cert, "")
+}
+
 func (h *harness) url(path string) string {
 	_, port, _ := net.SplitHostPort(h.addr)
 	return "gemini://localhost:" + port + path
@@ -173,7 +191,7 @@ func TestPages(t *testing.T) {
 		{"/~alice", 31, nil},
 		{"/~alice/", 20, []string{"# alice", "=> /~alice/proj/ proj - seeded"}},
 		{"/~alice/proj", 31, nil},
-		{"/~alice/proj/", 20, []string{"git clone git@localhost:alice/proj.git", "## README.md", "# Hello", "=> /~alice/proj/tree/main/docs/a.md docs", " =>injected"}},
+		{"/~alice/proj/", 20, []string{"git clone git@localhost:alice/proj.git", "## README.md", "# Hello", "=> /~alice/proj/tree/main/docs/a.md docs [readme link]", " =>injected"}},
 		{"/~alice/proj/tree/main/", 20, []string{"=> /~alice/proj/tree/main/docs/ docs/", "README.md (", "evil.txt ("}},
 		{"/~alice/proj/tree/main/docs", 31, nil},
 		{"/~alice/proj/tree/main/evil.txt", 20, []string{"```evil.txt\n=> gemini://evil/ click\n ```\n# heading\n```"}},
@@ -227,21 +245,29 @@ func TestRegistrationAndKeys(t *testing.T) {
 	if status != 20 || !strings.Contains(body, "not registered") {
 		t.Fatalf("unknown cert: %d %s", status, body)
 	}
-	status, meta, _ := h.get(h.url("/account?"), &cert, "")
-	if status != 10 {
-		t.Fatalf("expected input prompt for bare ?, got %d %s", status, meta)
+	// A pre-filled query never registers: the action redirect drops it.
+	status, meta, _ := h.get(h.url("/account/register?mallory"), &cert, "")
+	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+		t.Fatalf("expected action redirect, got %d %s", status, meta)
 	}
-	if status, meta, _ := h.get(h.url("/account?%3F"), &cert, ""); status != 10 {
-		t.Fatalf("expected input prompt, got %d %s", status, meta)
+	if status, _, _ := h.get(h.url(meta), &cert, ""); status != 10 {
+		t.Fatalf("expected input prompt after redirect, got %d", status)
+	}
+	if _, err := h.f.Store.UserByName(context.Background(), "mallory"); err == nil {
+		t.Fatal("pre-filled query registered an account")
+	}
+	// A forged token is rejected (redirected back to the plain path).
+	if status, meta, _ := h.get(h.url("/_/0123456789abcdef0123456789abcdef/account/register?x"), &cert, ""); status != 30 || meta != "/account/register" {
+		t.Fatalf("forged token: %d %s", status, meta)
 	}
 	if status, _, _ := h.get(strings.Replace(h.url("/"), "localhost", "evil.example", 1), nil, ""); status != 53 {
 		t.Errorf("foreign host: %d", status)
 	}
-	status, meta, _ = h.get(h.url("/account?Bad%20Name"), &cert, "")
+	status, meta, _ = h.act("/account/register", &cert, "Bad Name")
 	if status != 10 || !strings.Contains(meta, "not available") {
 		t.Fatalf("bad name: %d %s", status, meta)
 	}
-	status, meta, _ = h.get(h.url("/account?alice"), &cert, "")
+	status, meta, _ = h.act("/account/register", &cert, "alice")
 	if status != 30 || meta != "/account" {
 		t.Fatalf("register: %d %s", status, meta)
 	}
@@ -251,16 +277,12 @@ func TestRegistrationAndKeys(t *testing.T) {
 	}
 	// Second cert cannot take the same name.
 	cert2 := clientCert(t, "bob")
-	status, meta, _ = h.get(h.url("/account?alice"), &cert2, "")
+	status, meta, _ = h.act("/account/register", &cert2, "alice")
 	if status != 10 || !strings.Contains(meta, "taken") {
 		t.Fatalf("dup name: %d %s", status, meta)
 	}
 	// Create a repository through INPUT.
-	status, _, _ = h.get(h.url("/new"), &cert, "")
-	if status != 10 {
-		t.Fatalf("new prompt: %d", status)
-	}
-	status, meta, _ = h.get(h.url("/new?myrepo"), &cert, "")
+	status, meta, _ = h.act("/new", &cert, "myrepo")
 	if status != 30 || meta != "/~alice/myrepo/" {
 		t.Fatalf("create: %d %s", status, meta)
 	}
@@ -304,18 +326,14 @@ func TestRegistrationAndKeys(t *testing.T) {
 	}
 	code := ""
 	for _, l := range strings.Split(body, "\n") {
-		if len(l) == 16 && !strings.ContainsAny(l, " `") {
+		if len(l) == 32 && !strings.ContainsAny(l, " `") {
 			code = l
 		}
 	}
 	if code == "" {
 		t.Fatalf("no code in %s", body)
 	}
-	status, meta, _ = h.get(h.url("/account/enrol"), &cert2, "")
-	if status != 11 {
-		t.Fatalf("enrol prompt: %d %s", status, meta)
-	}
-	status, meta, _ = h.get(h.url("/account/enrol?"+code), &cert2, "")
+	status, meta, _ = h.act("/account/enrol", &cert2, code)
 	if status != 30 {
 		t.Fatalf("enrol: %d %s", status, meta)
 	}
@@ -324,7 +342,7 @@ func TestRegistrationAndKeys(t *testing.T) {
 		t.Fatalf("second device: %d %s", status, body)
 	}
 	cert3 := clientCert(t, "c")
-	status, meta, _ = h.get(h.url("/account/enrol?"+code), &cert3, "")
+	status, meta, _ = h.act("/account/enrol", &cert3, code)
 	if status != 11 {
 		t.Errorf("code reuse: %d %s", status, meta)
 	}
@@ -343,7 +361,7 @@ func genKey(t *testing.T) string {
 func TestMarkdown(t *testing.T) {
 	in := "# Title\n\nPara one\ncontinues [here](x.md).\n\n- a\n- b\n\n```go\nfmt.Println()\n```\n\n> quote\n"
 	got := MarkdownToGemtext(in, "/base/")
-	want := "# Title\n\nPara one continues here.\n=> /base/x.md here\n\n* a\n* b\n\n```go\nfmt.Println()\n```\n\n> quote\n\n"
+	want := "# Title\n\nPara one continues here.\n=> /base/x.md here [readme link]\n\n* a\n* b\n\n```go\nfmt.Println()\n```\n\n> quote\n\n"
 	if got != want {
 		t.Errorf("got:\n%q\nwant:\n%q", got, want)
 	}
@@ -362,8 +380,8 @@ func TestIssuesOverTitan(t *testing.T) {
 	if _, err := h.f.AddCertificate(ctx, au, id, "test"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _ = h.get(h.url("/account?bob"), &bob, ""); false {
-		t.Fatal()
+	if status, meta, _ := h.act("/account/register", &bob, "bob"); status != 30 {
+		t.Fatalf("register bob: %d %s", status, meta)
 	}
 
 	status, _, body := h.get(h.url("/~alice/proj/issues/"), nil, "")
@@ -395,15 +413,15 @@ func TestIssuesOverTitan(t *testing.T) {
 		t.Fatalf("issue with comment:\n%s", body)
 	}
 	// Bob (author) may close via INPUT confirmation; a bare request only prompts.
-	status, meta, _ = h.get(h.url("/~alice/proj/issues/1/close"), &bob, "")
-	if status != 10 {
-		t.Fatalf("close prompt: %d %s", status, meta)
+	status, meta, _ = h.get(h.url("/~alice/proj/issues/1/close?close"), &bob, "")
+	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+		t.Fatalf("pre-filled close must redirect: %d %s", status, meta)
 	}
-	status, _, _ = h.get(h.url("/~alice/proj/issues/1/close?nope"), &bob, "")
+	status, _, _ = h.act("/~alice/proj/issues/1/close", &bob, "nope")
 	if status != 10 {
 		t.Fatalf("close unconfirmed: %d", status)
 	}
-	status, meta, _ = h.get(h.url("/~alice/proj/issues/1/close?close%20fixed%20in%20main"), &bob, "")
+	status, meta, _ = h.act("/~alice/proj/issues/1/close", &bob, "close fixed in main")
 	if status != 30 {
 		t.Fatalf("close: %d %s", status, meta)
 	}
@@ -417,8 +435,8 @@ func TestIssuesOverTitan(t *testing.T) {
 	}
 	// A stranger cannot close or edit.
 	stranger := clientCert(t, "carol")
-	_, _, _ = h.get(h.url("/account?carol"), &stranger, "")
-	status, _, _ = h.get(h.url("/~alice/proj/issues/1/reopen?reopen"), &stranger, "")
+	_, _, _ = h.act("/account/register", &stranger, "carol")
+	status, _, _ = h.act("/~alice/proj/issues/1/reopen", &stranger, "reopen")
 	if status != 61 {
 		t.Errorf("stranger reopen: %d", status)
 	}
@@ -468,7 +486,7 @@ func TestReleasesAndSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	bob := clientCert(t, "bob")
-	_, _, _ = h.get(h.url("/account?bob"), &bob, "")
+	_, _, _ = h.act("/account/register", &bob, "bob")
 
 	// Release for the existing tag v0.1; unknown tag refused.
 	bad := "v9\nNope\n"
@@ -515,10 +533,7 @@ func TestReleasesAndSettings(t *testing.T) {
 		t.Fatalf("release feed:\n%s", body)
 	}
 	// Delete asset with confirmation.
-	if status, _, _ := h.get(h.url("/~alice/proj/releases/v0.1/assets/evil.html/delete"), &alice, ""); status != 10 {
-		t.Errorf("asset delete prompt: %d", status)
-	}
-	if status, _, _ := h.get(h.url("/~alice/proj/releases/v0.1/assets/evil.html/delete?delete"), &alice, ""); status != 30 {
+	if status, _, _ := h.act("/~alice/proj/releases/v0.1/assets/evil.html/delete", &alice, "delete"); status != 30 {
 		t.Errorf("asset delete: %d", status)
 	}
 	if status, _, _ := h.get(h.url("/~alice/proj/releases/v0.1/assets/evil.html"), nil, ""); status != 51 {
@@ -533,13 +548,13 @@ func TestReleasesAndSettings(t *testing.T) {
 	if status != 20 || !strings.Contains(body, "Visibility: public") {
 		t.Fatalf("settings page: %d %s", status, body)
 	}
-	if status, _, _ := h.get(h.url("/~alice/proj/settings/visibility?private"), &alice, ""); status != 30 {
+	if status, _, _ := h.act("/~alice/proj/settings/visibility", &alice, "private"); status != 30 {
 		t.Errorf("set private: %d", status)
 	}
 	if status, _, _ := h.get(h.url("/~alice/proj/"), nil, ""); status != 51 {
 		t.Errorf("private repo anon: %d", status)
 	}
-	if status, _, _ := h.get(h.url("/~alice/proj/settings/collaborators/add?bob%20write"), &alice, ""); status != 30 {
+	if status, _, _ := h.act("/~alice/proj/settings/collaborators/add", &alice, "bob write"); status != 30 {
 		t.Errorf("add collaborator: %d", status)
 	}
 	if status, _, _ := h.get(h.url("/~alice/proj/"), &bob, ""); status != 20 {
@@ -553,17 +568,17 @@ func TestReleasesAndSettings(t *testing.T) {
 	if !strings.Contains(body, "Description: A fine project") || !strings.Contains(body, "bob: write") {
 		t.Fatalf("settings after changes:\n%s", body)
 	}
-	if status, _, _ := h.get(h.url("/~alice/proj/settings/archive?archive"), &alice, ""); status != 30 {
+	if status, _, _ := h.act("/~alice/proj/settings/archive", &alice, "archive"); status != 30 {
 		t.Errorf("archive: %d", status)
 	}
 	txt := "blocked\n"
 	if status, _, _ := h.get(h.titan("/~alice/proj/issues/new", "text/plain", txt), &bob, txt); status != 50 {
 		t.Errorf("issue on archived repo: %d", status)
 	}
-	if status, _, _ := h.get(h.url("/~alice/proj/settings/delete?wrong"), &alice, ""); status != 10 {
+	if status, _, _ := h.act("/~alice/proj/settings/delete", &alice, "wrong"); status != 10 {
 		t.Errorf("delete wrong confirm: %d", status)
 	}
-	if status, _, _ := h.get(h.url("/~alice/proj/settings/delete?alice/proj"), &alice, ""); status != 30 {
+	if status, _, _ := h.act("/~alice/proj/settings/delete", &alice, "alice/proj"); status != 30 {
 		t.Errorf("delete: %d", status)
 	}
 	if status, _, _ := h.get(h.url("/~alice/proj/"), &alice, ""); status != 51 {

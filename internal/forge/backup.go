@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"as215520.net/forge/internal/store"
+	"as215520.net/forge/internal/vcs"
 )
 
 // Backup writes a consistent backup. When out ends in .db only a database
@@ -211,6 +212,9 @@ func (f *Forge) Restore(ctx context.Context, in string) error {
 	return nil
 }
 
+// ChangeRefRetention is how long refs of closed changes are kept.
+const ChangeRefRetention = 90 * 24 * time.Hour
+
 // Maintain runs housekeeping: purge deleted repositories and tokens, git
 // gc on every repository, size refresh, and database optimisation. With
 // check set it also runs fsck and reports corruption.
@@ -228,13 +232,38 @@ func (f *Forge) Maintain(ctx context.Context, check bool) (map[string]int, error
 	if err != nil {
 		return stats, err
 	}
+	// Refs of changes closed more than ChangeRefRetention ago are dropped so
+	// abandoned proposals stop consuming the owner's quota (ADR 0012).
+	if stale, err := f.Store.StaleClosedChanges(ctx, time.Now().Add(-ChangeRefRetention)); err == nil {
+		for _, ch := range stale {
+			r, err := f.Store.RepoByID(ctx, ch.RepoID)
+			if err != nil {
+				continue
+			}
+			repo, err := f.Open(r)
+			if err != nil {
+				continue
+			}
+			refs, err := repo.RefsMatching(ctx, fmt.Sprintf("refs/changes/%d/", ch.Number))
+			if err != nil || len(refs) == 0 {
+				continue
+			}
+			var dels []vcs.RefUpdate
+			for _, ref := range refs {
+				dels = append(dels, vcs.RefUpdate{Ref: ref.Name, New: "", Old: ref.Target})
+			}
+			if err := repo.UpdateRefs(ctx, dels, "forge: prune closed change"); err == nil {
+				stats["pruned_changes"]++
+			}
+		}
+	}
 	for _, r := range repos {
 		repo, err := f.Open(r)
 		if err != nil {
 			stats["missing"]++
 			continue
 		}
-		cmd := f.Git.Command(ctx, repo.Path(), "-c", "gc.auto=6700", "gc", "--auto", "--quiet")
+		cmd := f.Git.Command(ctx, repo.Path(), "-c", "gc.auto=6700", "-c", "gc.reflogExpireUnreachable=now", "gc", "--auto", "--quiet")
 		if outb, err := cmd.CombinedOutput(); err != nil {
 			f.Log.Warn("gc failed", "repo", r.Owner+"/"+r.Name, "err", err, "out", string(outb))
 			stats["gc_failed"]++

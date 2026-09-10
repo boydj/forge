@@ -137,3 +137,18 @@ when repository settings gain destructive endpoints.
 - **Elpher** with `gemini-write`, Alex Schroeder's Perl `titan`, and the
   Rust `trot` CLI also work in principle (not tested here). Amfora, gmni,
   Kristall, Bombadillo have no Titan support.
+
+### Action tokens (query-driven writes)
+
+A Gemini INPUT answer arrives as the URL query, and a link can pre-fill a
+query. Typed confirmation alone therefore proves nothing. Every
+query-driven state change (`/new`, `/account/register`, `/account/enrol`,
+key removal, certificate revocation, issue close/reopen, comment and
+release deletion, repository settings) is served only under
+`/_/<token>/<path>`, where the token is an HMAC of the acting identity
+(account id, or certificate key before registration), the path and the
+UTC day, keyed with a per-node or cluster secret. A request without the
+token is redirected to the tokenised path with the query dropped, which
+forces the client to show the INPUT prompt; a request with a wrong token is
+redirected to the plain path. Tokens are valid for two days and never
+appear in page content, so a third party cannot construct one.

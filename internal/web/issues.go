@@ -192,9 +192,8 @@ func (h *Handler) issueSetState(req *request, rc *repoCtx, is *store.Issue, clos
 	if closed {
 		verb = "close"
 	}
-	q := strings.TrimSpace(req.Query())
-	if q == "" {
-		_ = gemini.Input(req.w, fmt.Sprintf("Type %q to %s issue #%d, optionally followed by a comment", verb, verb, is.Number))
+	q, ok := req.action(h, fmt.Sprintf("Type %q to %s issue #%d, optionally followed by a comment", verb, verb, is.Number), false)
+	if !ok {
 		return
 	}
 	word, comment, _ := strings.Cut(q, " ")
@@ -325,8 +324,12 @@ func (h *Handler) commentDelete(req *request, rc *repoCtx, c *store.Comment, bac
 	if u == nil {
 		return
 	}
-	if q := strings.TrimSpace(req.Query()); !strings.EqualFold(q, "delete") {
-		_ = gemini.Input(req.w, "Type \"delete\" to remove this comment")
+	q, ok := req.action(h, "Type \"delete\" to remove this comment", false)
+	if !ok {
+		return
+	}
+	if !strings.EqualFold(q, "delete") {
+		_ = gemini.Input(req.w, "Not confirmed. Type \"delete\" to remove this comment")
 		return
 	}
 	if err := h.F.DeleteComment(req.ctx, u, rc.acc, c); err != nil {
@@ -352,7 +355,7 @@ func userGemtext(text string) string {
 		case strings.HasPrefix(l, "=>"):
 			target, label, _ := strings.Cut(strings.TrimSpace(l[2:]), " ")
 			target = sanitizeURL(target)
-			if target == "" || !(strings.HasPrefix(target, "gemini://") || strings.HasPrefix(target, "/") || strings.HasPrefix(target, "titan://") || strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://")) {
+			if target == "" || !(strings.HasPrefix(target, "gemini://") || strings.HasPrefix(target, "/") || strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://")) {
 				out.WriteString(" " + l + "\n")
 				continue
 			}

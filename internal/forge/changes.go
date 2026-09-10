@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"as215520.net/forge/internal/hooks"
 	"as215520.net/forge/internal/store"
@@ -53,8 +54,13 @@ func parsePushOptions(opts []string) (pushOptions, error) {
 			po.change = n
 		case "title":
 			v = strings.TrimSpace(v)
-			if v == "" || len(v) > MaxTitleLen {
-				return po, fmt.Errorf("title option is empty or too long")
+			if v == "" || utf8.RuneCountInString(v) > MaxTitleLen || !utf8.ValidString(v) {
+				return po, fmt.Errorf("title option is empty, too long or not UTF-8")
+			}
+			for _, r := range v {
+				if r < 0x20 || r == 0x7f {
+					return po, fmt.Errorf("title option contains control characters")
+				}
 			}
 			po.title = v
 		default:
@@ -167,8 +173,22 @@ func (f *Forge) procReceive(ctx context.Context, req *hooks.Request, r *store.Re
 			}
 			title, body = first[0].Subject, first[0].Body
 		}
-		if len(title) > MaxTitleLen {
-			title = title[:MaxTitleLen]
+		title = strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return ' '
+			}
+			return r
+		}, strings.ToValidUTF8(title, "?"))
+		if utf8.RuneCountInString(title) > MaxTitleLen {
+			title = string([]rune(title)[:MaxTitleLen])
+		}
+		body = strings.ToValidUTF8(strings.ReplaceAll(body, "\x00", ""), "?")
+		if int64(len(body)) > f.Config.Limits.MaxTextBytes {
+			body = body[:f.Config.Limits.MaxTextBytes]
+			for len(body) > 0 && !utf8.ValidString(body) {
+				body = body[:len(body)-1]
+			}
+			body += "\n[truncated]"
 		}
 		ch = &store.Change{RepoID: r.ID, AuthorID: u.ID, Title: title, Body: body, Topic: po.topic, TargetBranch: target}
 	}
@@ -334,6 +354,9 @@ func (f *Forge) EditChange(ctx context.Context, u *store.User, acc Access, ch *s
 	}
 	if !canManageChange(u, acc, ch) {
 		return ErrForbidden
+	}
+	if acc.Repo.Archived {
+		return ErrArchived
 	}
 	if !f.IsLeader(acc.Repo) {
 		return ErrNotLeader

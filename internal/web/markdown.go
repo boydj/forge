@@ -32,7 +32,11 @@ func MarkdownToGemtext(md, base string) string {
 			para = nil
 		}
 		for _, l := range links {
-			out.WriteString("=> " + l[1] + " " + l[0] + "\n")
+			if l[1] == "" {
+				out.WriteString(gemini.EscapeLine(l[0]) + "\n")
+				continue
+			}
+			out.WriteString("=> " + l[1] + " " + l[0] + " [readme link]\n")
 		}
 		links = nil
 	}
@@ -99,7 +103,11 @@ func MarkdownToGemtext(md, base string) string {
 			flush()
 		case strings.HasPrefix(trim, "    ") || strings.HasPrefix(line, "\t"):
 			flush()
-			out.WriteString("```\n" + strings.TrimPrefix(strings.TrimPrefix(line, "    "), "\t") + "\n```\n")
+			code := strings.TrimPrefix(strings.TrimPrefix(line, "    "), "\t")
+			if strings.HasPrefix(code, "```") {
+				code = " " + code
+			}
+			out.WriteString("```\n" + code + "\n```\n")
 		case trim == "---" || trim == "***" || trim == "___":
 			flush()
 		case regexp.MustCompile(`^\d+\. `).MatchString(trim):
@@ -160,7 +168,7 @@ func rebaseGemtextLinks(gmi, base string) string {
 			lines[i] = " " + l
 			continue
 		}
-		lines[i] = strings.TrimRight("=> "+target+" "+strings.TrimSpace(label), " ")
+		lines[i] = strings.TrimRight("=> "+target+" "+strings.TrimSpace(label), " ") + " [readme link]"
 	}
 	return strings.Join(lines, "\n")
 }

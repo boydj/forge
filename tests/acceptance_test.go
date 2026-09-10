@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -284,7 +285,7 @@ func TestSecondAcceptance(t *testing.T) {
 	if status != 20 {
 		t.Fatalf("unknown cert should see registration page: %d %s", status, meta)
 	}
-	status, meta, _ = n.request("gemini", "/account?carol", &cert, "")
+	status, meta, _ = n.act("/account/register", &cert, "carol")
 	if status != 30 {
 		t.Fatalf("register: %d %s", status, meta)
 	}
@@ -462,9 +463,25 @@ func registeredCert(t *testing.T, n *node, user string) tls.Certificate {
 	out := n.admin("cert", "enrol-code", user)
 	f := strings.Fields(out)
 	code := f[len(f)-1]
-	status, meta, _ := n.request("gemini", "/account/enrol?"+code, &cert, "")
+	status, meta, _ := n.act("/account/enrol", &cert, code)
 	if status != 30 {
 		t.Fatalf("enrol %s: %d %s", user, status, meta)
 	}
 	return cert
+}
+
+// act drives a query-driven action through the action-token redirect and
+// the INPUT prompt, answering with value.
+func (n *node) act(path string, cert *tls.Certificate, value string) (int, string, string) {
+	n.t.Helper()
+	status, meta, body := n.request("gemini", path, cert, "")
+	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+		return status, meta, body
+	}
+	tokPath := meta
+	status, meta, body = n.request("gemini", tokPath, cert, "")
+	if status != 10 && status != 11 {
+		return status, meta, body
+	}
+	return n.request("gemini", tokPath+"?"+url.QueryEscape(value), cert, "")
 }

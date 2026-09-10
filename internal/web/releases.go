@@ -59,8 +59,12 @@ func (h *Handler) releaseRoutes(req *request, rc *repoCtx, rest []string) {
 		if u == nil {
 			return
 		}
-		if !strings.EqualFold(strings.TrimSpace(req.Query()), "delete") {
-			_ = gemini.Input(req.w, fmt.Sprintf("Type \"delete\" to remove release %s and its assets", rel.Tag))
+		q, ok := req.action(h, fmt.Sprintf("Type \"delete\" to remove release %s and its assets", rel.Tag), false)
+		if !ok {
+			return
+		}
+		if !strings.EqualFold(q, "delete") {
+			_ = gemini.Input(req.w, "Not confirmed. Type \"delete\" to remove the release")
 			return
 		}
 		if err := h.F.DeleteRelease(req.ctx, u, rc.acc, rel); err != nil {
@@ -84,8 +88,12 @@ func (h *Handler) releaseRoutes(req *request, rc *repoCtx, rest []string) {
 			if u == nil {
 				return
 			}
-			if !strings.EqualFold(strings.TrimSpace(req.Query()), "delete") {
-				_ = gemini.Input(req.w, fmt.Sprintf("Type \"delete\" to remove asset %s", a.Name))
+			q, ok := req.action(h, fmt.Sprintf("Type \"delete\" to remove asset %s", a.Name), false)
+			if !ok {
+				return
+			}
+			if !strings.EqualFold(q, "delete") {
+				_ = gemini.Input(req.w, "Not confirmed. Type \"delete\" to remove the asset")
 				return
 			}
 			if err := h.F.RemoveAsset(req.ctx, u, rc.acc, rel, a); err != nil {

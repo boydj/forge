@@ -94,7 +94,8 @@ func (s *Store) Events(ctx context.Context, q EventQuery) ([]*Event, error) {
 		LEFT JOIN repositories r ON r.id = e.repo_id
 		LEFT JOIN users o ON o.id = r.owner_id
 		LEFT JOIN users u ON u.id = e.user_id
-		WHERE (e.repo_id IS NULL OR (r.deleted_at IS NULL AND (r.private = 0 OR r.owner_id = ?1
+		WHERE NOT (e.kind IN ('user.key.add', 'user.cert.add') AND e.user_id IS NOT ?1)
+		AND (e.repo_id IS NULL OR (r.deleted_at IS NULL AND (r.private = 0 OR r.owner_id = ?1
 			OR EXISTS (SELECT 1 FROM collaborators c WHERE c.repo_id = r.id AND c.user_id = ?1)
 			OR EXISTS (SELECT 1 FROM users a WHERE a.id = ?1 AND a.admin = 1))))`
 	args := []any{q.Viewer}

@@ -62,9 +62,8 @@ func (h *Handler) newRepo(req *request) {
 	if u == nil {
 		return
 	}
-	name := req.Query()
-	if name == "" {
-		_ = gemini.Input(req.w, "Repository name (lowercase letters, digits, . _ -)")
+	name, ok := req.action(h, "Repository name (lowercase letters, digits, . _ -)", false)
+	if !ok {
 		return
 	}
 	r, err := h.F.CreateRepo(req.ctx, u, forge.CreateRepoOptions{Name: name})

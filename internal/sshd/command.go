@@ -127,7 +127,7 @@ func ParseCommand(line string) (Command, error) {
 	if !ownerRe.MatchString(owner) {
 		return cmd, fmt.Errorf("%w: invalid owner name", ErrBadCommand)
 	}
-	if !repoRe.MatchString(repo) || strings.HasSuffix(repo, ".git") {
+	if !repoRe.MatchString(repo) || strings.HasSuffix(repo, ".git") || strings.Contains(repo, "..") {
 		return cmd, fmt.Errorf("%w: invalid repository name", ErrBadCommand)
 	}
 	cmd.Owner, cmd.Repo = owner, repo

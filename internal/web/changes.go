@@ -3,6 +3,7 @@ package web
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -288,6 +289,24 @@ func (h *Handler) changePage(req *request, rc *repoCtx, ch *store.Change) {
 
 var anchorRe = regexp.MustCompile(`^@ (\S+?)(?::(\d+))?(?: v(\d+))?\s*$`)
 
+// safeAnchorPath accepts only plain relative repository paths in anchors.
+func safeAnchorPath(p string) bool {
+	if p == "" || len(p) > 512 || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "-") || strings.ContainsAny(p, "?#\\") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	for _, r := range p {
+		if r < 0x21 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 // renderAnchored renders review/comment text with "@ path[:line] [vK]"
 // anchor lines turned into diff links (ADR 0012 section 7).
 func (h *Handler) renderAnchored(rc *repoCtx, ch *store.Change, body string, defaultVersion int) string {
@@ -306,14 +325,18 @@ func (h *Handler) renderAnchored(rc *repoCtx, ch *store.Change, body string, def
 			if m[3] != "" {
 				ver, _ = strconv.Atoi(m[3])
 			}
-			if ver <= 0 {
+			if ver <= 0 || ver > ch.Version {
 				ver = ch.Version
+			}
+			if !safeAnchorPath(path) {
+				plain = append(plain, l)
+				continue
 			}
 			label := path
 			if line != "" {
 				label += ":" + line
 			}
-			out.WriteString(fmt.Sprintf("=> %s/v%d/diff/%s %s (v%d)\n", changeHref(rc, ch), ver, path, label, ver))
+			out.WriteString(fmt.Sprintf("=> %s/v%d/diff/%s %s (v%d) [user link]\n", changeHref(rc, ch), ver, url.PathEscape(path), label, ver))
 			continue
 		}
 		plain = append(plain, l)
