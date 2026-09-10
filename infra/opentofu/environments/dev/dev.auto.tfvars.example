@@ -1,0 +1,23 @@
+# Copy to dev.auto.tfvars (git-ignored) and fill in real addresses.
+# Documentation prefixes (RFC 5737 / RFC 3849) are used here as placeholders.
+
+zone_name = "as215520.net"
+# zone_id  = "023e105f4ecef8ad9ca31a8372d0c353"   # optional; skips Zone:Read
+
+anycast_v4 = ["203.0.113.1"]
+anycast_v6 = ["2001:db8:215:520::1"]
+
+nodes = {
+  ewr1 = {
+    ipv4 = "203.0.113.10"
+    ipv6 = "2001:db8:215:520:1::10"
+  }
+}
+
+# ssh-keygen -r git.as215520.net -f /etc/ssh/ssh_host_ed25519_key.pub
+# Only the SHA-256 (type 2) line is needed.
+sshfp = [
+  # { algorithm = 4, type = 2, fingerprint = "..." },
+]
+
+manage_dnssec = false

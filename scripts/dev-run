@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Run a local forge for development with a throwaway data directory.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mkdir -p var/dev
+if [ ! -f var/dev/forge.toml ]; then
+  ./bin/forge admin init --data var/dev --hostname localhost --write-config var/dev/forge.toml
+fi
+exec ./bin/forge serve --config var/dev/forge.toml "$@"

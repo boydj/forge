@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Install opentofu, sops and age into ~/.local/bin without root.
+set -euo pipefail
+BIN="${HOME}/.local/bin"; mkdir -p "$BIN"
+arch=$(uname -m); case "$arch" in x86_64) a=amd64;; aarch64|arm64) a=arm64;; *) echo "unsupported arch $arch"; exit 1;; esac
+os=$(uname -s | tr '[:upper:]' '[:lower:]')
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+latest() { curl -sSL "https://api.github.com/repos/$1/releases/latest" | python3 -c 'import json,sys;print(json.load(sys.stdin)["tag_name"])'; }
+if ! command -v tofu >/dev/null; then
+  v=$(latest opentofu/opentofu); vv=${v#v}
+  curl -sSL -o "$tmp/tofu.zip" "https://github.com/opentofu/opentofu/releases/download/${v}/tofu_${vv}_${os}_${a}.zip"
+  (cd "$tmp" && python3 -c 'import zipfile;zipfile.ZipFile("tofu.zip").extractall(".")' && install -m755 tofu "$BIN/tofu")
+fi
+if ! command -v sops >/dev/null; then
+  v=$(latest getsops/sops)
+  curl -sSL -o "$BIN/sops" "https://github.com/getsops/sops/releases/download/${v}/sops-${v}.${os}.${a}" && chmod +x "$BIN/sops"
+fi
+if ! command -v age >/dev/null; then
+  v=$(latest FiloSottile/age)
+  curl -sSL "https://github.com/FiloSottile/age/releases/download/${v}/age-${v}-${os}-${a}.tar.gz" | tar -xz -C "$tmp"
+  install -m755 "$tmp/age/age" "$BIN/age"; install -m755 "$tmp/age/age-keygen" "$BIN/age-keygen"
+fi
+tofu version | head -1; sops --version | head -1; age --version

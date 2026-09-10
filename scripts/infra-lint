@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Validate infrastructure code where the relevant tool is installed.
+# Missing tools are reported, not fatal, so that application-only checkouts
+# can still run `make lint`.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+rc=0
+if command -v tofu >/dev/null 2>&1; then
+  for d in $(find infra/opentofu -name '*.tf' -printf '%h\n' | sort -u); do
+    echo "tofu: $d"
+    tofu -chdir="$d" fmt -check -recursive >/dev/null || { echo "  fmt: needs formatting"; rc=1; }
+    if ! tofu -chdir="$d" init -backend=false -input=false >/dev/null 2>&1; then
+      echo "  init failed (provider download?)"; rc=1; continue
+    fi
+    tofu -chdir="$d" validate -no-color >/dev/null || { echo "  validate failed"; rc=1; }
+  done
+else
+  echo "tofu: not installed, skipping"
+fi
+if command -v bird >/dev/null 2>&1 && ls infra/bird/generated/*.conf >/dev/null 2>&1; then
+  for f in infra/bird/generated/*.conf; do bird -p -c "$f" || rc=1; done
+else
+  echo "bird: not installed or nothing generated, skipping"
+fi
+if command -v python3 >/dev/null 2>&1; then
+  for f in $(find infra -name '*.yaml' -o -name '*.yml'); do
+    python3 -c "import sys,yaml; yaml.safe_load(open(sys.argv[1]))" "$f" 2>/dev/null || { echo "yaml: $f invalid"; rc=1; }
+  done
+fi
+exit $rc

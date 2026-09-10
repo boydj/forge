@@ -1,0 +1,33 @@
+# build
+/bin/
+/dist/
+*.test
+*.out
+coverage.*
+# local state
+/var/
+/data/
+*.db
+*.db-wal
+*.db-shm
+# secrets (encrypted secrets live under infra/secrets/*.enc.yaml and ARE committed)
+*.key
+*.pem
+!testdata/**/*.pem
+!testdata/**/*.key
+.env
+*.tfvars
+!*.example.tfvars
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+# editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+# tooling
+.mise.local.toml
+node_modules/

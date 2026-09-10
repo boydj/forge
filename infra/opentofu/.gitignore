@@ -1,0 +1,11 @@
+# Local state, provider binaries and lock-free scratch.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+
+# Real values live outside git; the .example files are the template.
+*.auto.tfvars
+*.tfvars
+!*.tfvars.example
