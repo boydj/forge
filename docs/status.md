@@ -74,7 +74,6 @@ None deployed. Local: `make run` serves gemini://localhost:1965/ and ssh://local
 - Security review open items: SR-02 decrypted secrets on persistent disk
   (tmpfs delivery in progress), SR-19a/b deploy sudo scope and first-deploy
   TOFU (in progress), SR-24 informational.
-- Release asset files are not replicated between nodes (database rows are).
 - Forwarded Titan writes trust the replica's TLS verification of the client
   certificate (documented in `docs/replication.md`).
 
