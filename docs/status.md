@@ -102,4 +102,4 @@ None blocking application work. Items that will need the operator (batched, not 
 3. M6/M7: operator actions in `docs/runbooks/network-bootstrap.md`; `scripts/netcheck --expect announced` after Vultr approval.
 4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).
 5. Dogfooding once M4 is live and backups verified (`docs/dogfooding.md`).
-6. Optional: push the repository to the configured `origin` (github.com/boydj/forge) on operator request.
+6. Pushed to `origin` (github.com/boydj/forge) on 2026-09-10; GitHub Actions runs `.github/workflows/ci.yml` on every push.
