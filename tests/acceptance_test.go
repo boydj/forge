@@ -268,3 +268,92 @@ func TestFirstAcceptance(t *testing.T) {
 	}
 	n.admin("backup", "--out", filepath.Join(t.TempDir(), "snap.db"))
 }
+
+// TestSecondAcceptance: authenticate -> create issue via Titan -> read via
+// Gemini -> comment via Titan -> observe activity through the gemfeed.
+func TestSecondAcceptance(t *testing.T) {
+	n := startNode(t)
+	n.admin("user", "create", "alice")
+	n.admin("repo", "create", "alice/proj")
+
+	// A fresh client certificate registers as "carol" through the INPUT flow.
+	cert := newClientCert(t)
+	status, meta, _ := n.request("gemini", "/account", &cert, "")
+	if status != 20 {
+		t.Fatalf("unknown cert should see registration page: %d %s", status, meta)
+	}
+	status, meta, _ = n.request("gemini", "/account?carol", &cert, "")
+	if status != 30 {
+		t.Fatalf("register: %d %s", status, meta)
+	}
+
+	issue := "Feed test\n\nOpened over Titan.\n"
+	status, meta, _ = n.request("titan", fmt.Sprintf("/~alice/proj/issues/new;size=%d;mime=text/plain", len(issue)), &cert, issue)
+	if status != 30 || meta != "/~alice/proj/issues/1" {
+		t.Fatalf("create issue: %d %s", status, meta)
+	}
+	status, _, body := n.request("gemini", "/~alice/proj/issues/1", nil, "")
+	if status != 20 || !strings.Contains(body, "Opened over Titan.") || !strings.Contains(body, "opened by carol") {
+		t.Fatalf("read issue: %d\n%s", status, body)
+	}
+	comment := "Seen it too.\n"
+	status, meta, _ = n.request("titan", fmt.Sprintf("/~alice/proj/issues/1/comment;size=%d;mime=text/gemini", len(comment)), &cert, comment)
+	if status != 30 {
+		t.Fatalf("comment: %d %s", status, meta)
+	}
+	status, _, body = n.request("gemini", "/~alice/proj/issues/feed", nil, "")
+	if status != 20 || !strings.Contains(body, "carol opened issue #1: Feed test") || !strings.Contains(body, "carol commented on issue #1") {
+		t.Fatalf("issue feed: %d\n%s", status, body)
+	}
+	status, _, body = n.request("gemini", "/~carol/feed", nil, "")
+	if status != 20 || !strings.Contains(body, "carol opened issue #1") {
+		t.Fatalf("user feed: %d\n%s", status, body)
+	}
+	status, _, body = n.request("gemini", "/atom.xml", nil, "")
+	if status != 20 || !strings.Contains(body, "<title>carol commented on issue #1: Feed test</title>") {
+		t.Fatalf("atom: %d\n%s", status, body)
+	}
+}
+
+func newClientCert(t *testing.T) tls.Certificate {
+	t.Helper()
+	dir := t.TempDir()
+	key, crt := filepath.Join(dir, "c.key"), filepath.Join(dir, "c.crt")
+	out, err := exec.Command("openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes",
+		"-keyout", key, "-out", crt, "-days", "30", "-subj", "/CN=carol").CombinedOutput()
+	if err != nil {
+		t.Skipf("openssl: %v %s", err, out)
+	}
+	c, err := tls.LoadX509KeyPair(crt, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// request performs a Gemini or Titan request with an optional client cert.
+func (n *node) request(scheme, path string, cert *tls.Certificate, body string) (int, string, string) {
+	n.t.Helper()
+	cfg := &tls.Config{InsecureSkipVerify: true, ServerName: "localhost"}
+	if cert != nil {
+		cfg.Certificates = []tls.Certificate{*cert}
+	}
+	conn, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", n.gemPort), cfg)
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "%s://localhost:%d%s\r\n", scheme, n.gemPort, path)
+	if body != "" {
+		_, _ = io.WriteString(conn, body)
+	}
+	br := bufio.NewReader(conn)
+	header, err := br.ReadString('\n')
+	if err != nil {
+		n.t.Fatal(err)
+	}
+	var status int
+	fmt.Sscanf(header, "%d", &status)
+	rest, _ := io.ReadAll(br)
+	return status, strings.TrimSpace(header[3:]), string(rest)
+}

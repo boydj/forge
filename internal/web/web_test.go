@@ -384,7 +384,7 @@ func TestIssuesOverTitan(t *testing.T) {
 	if status != 30 {
 		t.Fatalf("comment: %d %s", status, meta)
 	}
-	status, _, body = h.get(h.url("/~alice/proj/issues/1"), &alice, "")
+	_, _, body = h.get(h.url("/~alice/proj/issues/1"), &alice, "")
 	if !strings.Contains(body, "## alice, ") || !strings.Contains(body, "Confirmed, thanks.") || !strings.Contains(body, "close this issue") {
 		t.Fatalf("issue with comment:\n%s", body)
 	}
@@ -401,11 +401,11 @@ func TestIssuesOverTitan(t *testing.T) {
 	if status != 30 {
 		t.Fatalf("close: %d %s", status, meta)
 	}
-	status, _, body = h.get(h.url("/~alice/proj/issues/1"), nil, "")
+	_, _, body = h.get(h.url("/~alice/proj/issues/1"), nil, "")
 	if !strings.Contains(body, "closed issue opened by bob") || !strings.Contains(body, "fixed in main") {
 		t.Fatalf("closed issue:\n%s", body)
 	}
-	status, _, body = h.get(h.url("/~alice/proj/issues/?closed"), nil, "")
+	_, _, body = h.get(h.url("/~alice/proj/issues/?closed"), nil, "")
 	if !strings.Contains(body, "#1 Crash on start (bob") || !strings.Contains(body, "2 comments") {
 		t.Fatalf("closed list:\n%s", body)
 	}
@@ -426,7 +426,7 @@ func TestIssuesOverTitan(t *testing.T) {
 	if status != 30 {
 		t.Fatalf("edit: %d %s", status, meta)
 	}
-	status, _, body = h.get(h.url("/~alice/proj/issues/1"), nil, "")
+	_, _, body = h.get(h.url("/~alice/proj/issues/1"), nil, "")
 	if !strings.Contains(body, "# #1 Crash on startup") || !strings.Contains(body, "edited body") {
 		t.Fatalf("after edit:\n%s", body)
 	}
@@ -449,4 +449,118 @@ func mustX509(t *testing.T, c tls.Certificate) *x509.Certificate {
 		t.Fatal(err)
 	}
 	return x
+}
+
+func TestReleasesAndSettings(t *testing.T) {
+	h := newHarness(t)
+	h.seedRepo("alice", "proj")
+	ctx := context.Background()
+	alice := clientCert(t, "alice")
+	au, _ := h.f.Store.UserByName(ctx, "alice")
+	id, _ := h.f.Authenticate(ctx, mustX509(t, alice))
+	if _, err := h.f.AddCertificate(ctx, au, id, "test"); err != nil {
+		t.Fatal(err)
+	}
+	bob := clientCert(t, "bob")
+	_, _, _ = h.get(h.url("/account?bob"), &bob, "")
+
+	// Release for the existing tag v0.1; unknown tag refused.
+	bad := "v9\nNope\n"
+	if status, _, _ := h.get(h.titan("/~alice/proj/releases/new", "text/plain", bad), &alice, bad); status != 51 {
+		t.Errorf("unknown tag: %d", status)
+	}
+	rel := "v0.1\nFirst release\n\nNotes:\n* works\n"
+	if status, _, _ := h.get(h.titan("/~alice/proj/releases/new", "text/plain", rel), &bob, rel); status != 61 {
+		t.Errorf("bob release: %d", status)
+	}
+	status, meta, _ := h.get(h.titan("/~alice/proj/releases/new", "text/plain", rel), &alice, rel)
+	if status != 30 || meta != "/~alice/proj/releases/v0.1" {
+		t.Fatalf("release: %d %s", status, meta)
+	}
+	if status, _, _ := h.get(h.titan("/~alice/proj/releases/new", "text/plain", rel), &alice, rel); status != 50 {
+		t.Errorf("duplicate release: %d", status)
+	}
+	// Asset upload, download, checksum.
+	asset := "binary\x00data"
+	status, meta, _ = h.get(h.titan("/~alice/proj/releases/v0.1/assets/proj-0.1.tar.gz", "application/gzip", asset), &alice, asset)
+	if status != 30 {
+		t.Fatalf("asset upload: %d %s", status, meta)
+	}
+	status, meta, body := h.get(h.url("/~alice/proj/releases/v0.1/assets/proj-0.1.tar.gz"), nil, "")
+	if status != 20 || meta != "application/gzip" || body != asset {
+		t.Fatalf("asset download: %d %s %q", status, meta, body)
+	}
+	if status, _, _ := h.get(h.titan("/~alice/proj/releases/v0.1/assets/../../x", "application/gzip", asset), &alice, asset); status == 30 {
+		t.Error("traversal asset name accepted")
+	}
+	if status, _, _ := h.get(h.titan("/~alice/proj/releases/v0.1/assets/evil.html", "text/html", asset), &alice, asset); status != 30 {
+		t.Errorf("unknown mime should be stored as octet-stream: %d", status)
+	}
+	_, meta, _ = h.get(h.url("/~alice/proj/releases/v0.1/assets/evil.html"), nil, "")
+	if meta != "application/octet-stream" {
+		t.Errorf("mime not neutralised: %s", meta)
+	}
+	_, _, body = h.get(h.url("/~alice/proj/releases/v0.1"), nil, "")
+	if !strings.Contains(body, "# v0.1: First release") || !strings.Contains(body, "proj-0.1.tar.gz (11 B, application/gzip)") || !strings.Contains(body, "sha256 ") {
+		t.Fatalf("release page:\n%s", body)
+	}
+	_, _, body = h.get(h.url("/~alice/proj/releases/feed"), nil, "")
+	if !strings.Contains(body, "alice released alice/proj v0.1: First release") {
+		t.Fatalf("release feed:\n%s", body)
+	}
+	// Delete asset with confirmation.
+	if status, _, _ := h.get(h.url("/~alice/proj/releases/v0.1/assets/evil.html/delete"), &alice, ""); status != 10 {
+		t.Errorf("asset delete prompt: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/releases/v0.1/assets/evil.html/delete?delete"), &alice, ""); status != 30 {
+		t.Errorf("asset delete: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/releases/v0.1/assets/evil.html"), nil, ""); status != 51 {
+		t.Errorf("deleted asset still served: %d", status)
+	}
+
+	// Settings.
+	if status, _, _ := h.get(h.url("/~alice/proj/settings"), &bob, ""); status != 61 {
+		t.Errorf("bob settings: %d", status)
+	}
+	status, _, body = h.get(h.url("/~alice/proj/settings"), &alice, "")
+	if status != 20 || !strings.Contains(body, "Visibility: public") {
+		t.Fatalf("settings page: %d %s", status, body)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/settings/visibility?private"), &alice, ""); status != 30 {
+		t.Errorf("set private: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/"), nil, ""); status != 51 {
+		t.Errorf("private repo anon: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/settings/collaborators/add?bob%20write"), &alice, ""); status != 30 {
+		t.Errorf("add collaborator: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/"), &bob, ""); status != 20 {
+		t.Errorf("collaborator cannot see private repo: %d", status)
+	}
+	desc := "A fine project\nsecond line ignored"
+	if status, _, _ := h.get(h.titan("/~alice/proj/settings/description", "text/plain", desc), &alice, desc); status != 30 {
+		t.Errorf("titan description: %d", status)
+	}
+	_, _, body = h.get(h.url("/~alice/proj/settings"), &alice, "")
+	if !strings.Contains(body, "Description: A fine project") || !strings.Contains(body, "bob: write") {
+		t.Fatalf("settings after changes:\n%s", body)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/settings/archive?archive"), &alice, ""); status != 30 {
+		t.Errorf("archive: %d", status)
+	}
+	txt := "blocked\n"
+	if status, _, _ := h.get(h.titan("/~alice/proj/issues/new", "text/plain", txt), &bob, txt); status != 50 {
+		t.Errorf("issue on archived repo: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/settings/delete?wrong"), &alice, ""); status != 10 {
+		t.Errorf("delete wrong confirm: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/settings/delete?alice/proj"), &alice, ""); status != 30 {
+		t.Errorf("delete: %d", status)
+	}
+	if status, _, _ := h.get(h.url("/~alice/proj/"), &alice, ""); status != 51 {
+		t.Errorf("deleted repo visible: %d", status)
+	}
 }

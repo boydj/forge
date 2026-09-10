@@ -229,3 +229,29 @@ func (f *Forge) RefreshSize(ctx context.Context, r *store.Repo) (int64, error) {
 	r.SizeBytes = size
 	return size, f.Store.SetRepoSize(ctx, r.ID, size)
 }
+
+// SetCollaborator grants or removes a role for a named user.
+func (f *Forge) SetCollaborator(ctx context.Context, u *store.User, r *store.Repo, name string, role store.Role) error {
+	perm, err := f.Permission(ctx, u, r)
+	if err != nil {
+		return err
+	}
+	if perm != store.RoleAdmin {
+		return ErrForbidden
+	}
+	target, err := f.Store.UserByName(ctx, strings.ToLower(strings.TrimSpace(name)))
+	if errors.Is(err, store.ErrNotFound) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if target.ID == r.OwnerID {
+		return ErrNotAcceptable
+	}
+	if err := f.Store.SetCollaborator(ctx, r.ID, target.ID, role); err != nil {
+		return err
+	}
+	f.Event(ctx, store.EventRepoUpdate, r, u, fmt.Sprintf("%s changed collaborators of %s/%s", u.Name, r.Owner, r.Name), "/~"+r.Owner+"/"+r.Name+"/", nil)
+	return nil
+}
