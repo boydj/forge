@@ -1,0 +1,371 @@
+# Machine-readable Vultr facts for the anycast deployment. Researched 2026-09-10.
+# Sources are listed in docs/research/vultr.md. Values marked verify: true are unconfirmed.
+provider: vultr
+customer:
+  asn: 215520
+  rir: RIPE
+  prefixes_planned: { ipv4: /24, ipv6: /48 }
+
+bgp:
+  vultr_public_asn: 20473
+  cloud_compute:
+    peer_asn: 64515
+    peer_ipv4: 169.254.169.254
+    peer_ipv6: "2001:19f0:ffff::1"
+    multihop: 2
+    auth: tcp-md5              # password set by customer in the BGP request form
+    source_address: main_ip_only
+  bare_metal:
+    peer_asn: 20473
+    peer_ipv4: 169.254.1.1
+    peer_ipv6: "2001:19f0:ffff::1"
+    multihop: 2
+  external_as_path: "20473 215520"
+  min_announce: { ipv4: 24, ipv6: 48 }
+  default_export: global       # no implicit no-export; do NOT set 20473:6000
+  enable_process:
+    console_url: https://console.vultr.com/bgp/setup/
+    console_path: "Products > Network > BGP > Get Started"
+    requires_active_instance: true
+    human_review: true
+    loa_required: true
+    loa_wording: "authorize Vultr (AS20473) to announce the listed prefixes"
+  api:
+    list_prefixes: { method: GET, path: /v2/account/bgp/prefixes, verify: true }
+    setup_request: { method: POST, path: /v2/account/bgp/setup, verify: true }
+    terraform_resource: null   # none exists (provider 2.32.0)
+
+communities:
+  standard:
+    "20473:6000": do_not_advertise_globally
+    "20473:6001": prepend_1x_all
+    "20473:6002": prepend_2x_all
+    "20473:6003": prepend_3x_all
+    "20473:64609": med_0_all
+    "20473:6601": no_announce_to_ixp_peers
+    "20473:6602": override_no_advertise_ix_route_servers
+    "20473:6603": override_no_advertise_ix_and_bilateral
+    "20473:666": blackhole
+  per_peer:                    # replace peer-as with target ASN
+    "64600:peer-as": do_not_advertise_to_peer
+    "64601:peer-as": prepend_1x_to_peer
+    "64602:peer-as": prepend_2x_to_peer
+    "64603:peer-as": prepend_3x_to_peer
+    "64609:peer-as": med_0_to_peer
+    "64699:peer-as": override_do_not_advertise_to_peer
+  large_per_peer:
+    "20473:6000:peer-as": do_not_advertise_to_peer
+    "20473:6001:peer-as": prepend_1x_to_peer
+    "20473:6002:peer-as": prepend_2x_to_peer
+    "20473:6003:peer-as": prepend_3x_to_peer
+    "20473:6009:peer-as": med_0_to_peer
+    "20473:6099:peer-as": override_do_not_advertise_to_peer
+  informational:
+    "20473:100": learned_from_transit
+    "20473:200": learned_from_public_peer
+    "20473:300": learned_from_private_peer
+    "20473:500": originated_by_as20473
+    "20473:4000": originated_by_customer
+    "20473:NN": pop_location_two_digit
+    "20473:0:3RRRCCC1PP": large_location_community
+
+byoip:
+  ipv4_prefix_range: [16, 24]
+  ipv6_prefix_range: [32, 48]
+  ipv6_supported: true
+  max_prefixes_per_account: 5
+  anycast_allowed: true
+  instance_bgp_required: true
+  vultr_originated_option: false   # only for Vultr-owned reserved IPs via AS64515
+  roa:
+    recommended: true
+    origin_asn_required: 215520    # customer ASN when account uses its own ASN; AS20473 only for private-ASN accounts
+    max_length: { ipv4: 24, ipv6: 48 }
+    nightly_check: true
+  irr:
+    accepted: [RADB, ARIN, RIPE, APNIC]
+    auto_create_in_radb: true
+    as_set: "RADB::AS20473:AS-CONE"
+  timeline:
+    rir_poc_confirmation: same_day
+    verification_hours: [24, 48]
+    transit_filters_dynamic_hours: [6, 24]
+    transit_filters_manual_hours_min: 48
+  removal: support_ticket
+
+regions:
+  - id: ams
+    city: "Amsterdam"
+    country: NL
+    bgp: true
+    transit_filtering: dynamic
+  - id: atl
+    city: "Atlanta"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: blr
+    city: "Bangalore"
+    country: IN
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: bom
+    city: "Mumbai"
+    country: IN
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: cdg
+    city: "Paris"
+    country: FR
+    bgp: true
+    transit_filtering: dynamic
+  - id: del
+    city: "Delhi NCR"
+    country: IN
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: dfw
+    city: "Dallas"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: ewr
+    city: "New Jersey"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: fra
+    city: "Frankfurt"
+    country: DE
+    bgp: true
+    transit_filtering: dynamic
+  - id: hnl
+    city: "Honolulu"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: icn
+    city: "Seoul"
+    country: KR
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: itm
+    city: "Osaka"
+    country: JP
+    bgp: true
+    transit_filtering: dynamic
+  - id: jnb
+    city: "Johannesburg"
+    country: ZA
+    bgp: true
+    transit_filtering: dynamic
+  - id: lax
+    city: "Los Angeles"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: lhr
+    city: "London"
+    country: GB
+    bgp: true
+    transit_filtering: dynamic
+  - id: mad
+    city: "Madrid"
+    country: ES
+    bgp: true
+    transit_filtering: dynamic
+  - id: man
+    city: "Manchester"
+    country: GB
+    bgp: true
+    transit_filtering: dynamic
+  - id: mel
+    city: "Melbourne"
+    country: AU
+    bgp: true
+    transit_filtering: dynamic
+  - id: mex
+    city: "Mexico City"
+    country: MX
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: mia
+    city: "Miami"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: mxp
+    city: "Milan"
+    country: IT
+    bgp: true
+    transit_filtering: dynamic
+  - id: nrt
+    city: "Tokyo"
+    country: JP
+    bgp: true
+    transit_filtering: dynamic
+  - id: ord
+    city: "Chicago"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: sao
+    city: "São Paulo"
+    country: BR
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: scl
+    city: "Santiago"
+    country: CL
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: sea
+    city: "Seattle"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: sgp
+    city: "Singapore"
+    country: SG
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: sjc
+    city: "Silicon Valley"
+    country: US
+    bgp: true
+    transit_filtering: dynamic
+  - id: sto
+    city: "Stockholm"
+    country: SE
+    bgp: true
+    transit_filtering: dynamic
+  - id: syd
+    city: "Sydney"
+    country: AU
+    bgp: true
+    transit_filtering: dynamic
+  - id: tlv
+    city: "Tel Aviv"
+    country: IL
+    bgp: true
+    transit_filtering: manual_or_local
+  - id: waw
+    city: "Warsaw"
+    country: PL
+    bgp: true
+    transit_filtering: dynamic
+  - id: yto
+    city: "Toronto"
+    country: CA
+    bgp: true
+    transit_filtering: dynamic
+
+plans:
+  cheapest_suitable:
+    - id: vc2-1c-1gb
+      monthly_usd: 5.00
+      hourly_usd: 0.007
+      bandwidth_gb: 1024
+      locations: [ewr, ord, dfw, sea, lax, atl, ams, lhr, fra, sjc, syd, yto, cdg, nrt, waw, mad, icn, mia, sgp, sto, mex, sao, mel, bom, jnb, tlv, blr, del, scl, itm, man]
+      location_cost_overrides: { sao: 7.50 }
+    - id: vhp-1c-1gb-intel
+      monthly_usd: 6.00
+      bandwidth_gb: 2048
+      locations: [ewr, ord, dfw, sea, lax, atl, ams, lhr, fra, sjc, syd, yto, cdg, nrt, waw, mad, icn, mia, sgp, sto, mex, sao, mel, hnl, bom, jnb, tlv, blr, del, scl, itm, man]
+    - id: vhp-1c-1gb-amd
+      monthly_usd: 6.00
+      bandwidth_gb: 2048
+  sandbox_unverified_for_bgp:
+    - { id: vc2-1c-0.5gb, monthly_usd: 3.50, account_cap: 5, locations: [ewr] }
+    - { id: vc2-1c-0.5gb-v6, monthly_usd: 2.50, ipv6_only: true, account_cap: 2, locations: [ewr,atl] }
+  addons:
+    bandwidth_overage_usd_per_gb: 0.01
+    backups_pct_of_plan: 20
+    snapshot_usd_per_gb_month: 0.05
+    block_storage_usd_per_gb_month: { hdd: 0.025, nvme: 0.10 }
+    ddos_protection_usd_per_month: { value: 12, verify: true }
+
+os_images:
+  debian_12: 2136
+  debian_13: 2625
+  ubuntu_22_04: 1743
+  ubuntu_24_04: 2284
+  ubuntu_26_04: 2760
+  alpine: 2076
+  cloud_init: linux_images_all
+
+ipv6:
+  per_instance_prefix: 64
+  gateway: "fe80::1"
+  config: slaac_ra
+  nameservers: ["108.61.10.10", "2001:19f0:300:1704::6"]
+  additional_subnets: assignable
+  bgp_supported: true
+
+metadata:
+  base_url: http://169.254.169.254
+  json_endpoint: /v1.json
+  header: { Metadata-Token: cloudinit }
+  keys:
+    - bgp.ipv4.my-address
+    - bgp.ipv4.my-asn
+    - bgp.ipv4.peer-address
+    - bgp.ipv4.peer-asn
+    - bgp.ipv6.my-address
+    - bgp.ipv6.my-asn
+    - bgp.ipv6.peer-address
+    - bgp.ipv6.peer-asn
+    - hostname
+    - instance-v2-id
+    - instanceid
+    - interfaces[].mac
+    - interfaces[].network-type
+    - interfaces[].ipv4.address
+    - interfaces[].ipv4.gateway
+    - interfaces[].ipv4.netmask
+    - interfaces[].ipv4.additional[]
+    - interfaces[].ipv6.address
+    - interfaces[].ipv6.network
+    - interfaces[].ipv6.prefix
+    - interfaces[].ipv6.additional[]
+    - public-keys[]
+    - region.regioncode
+    - region.countrycode
+    - user-defined[]
+    - startup-script
+    - user-data
+    - vendor-data
+
+firewall:
+  resources: [vultr_firewall_group, vultr_firewall_rule]
+  direction: inbound_only
+  ip_types: [v4, v6]
+  protocols: [icmp, tcp, udp, gre, esp, ah]
+  sources: ["", cloudflare]
+  covers_byoip_addresses: unknown
+  host_nftables_required: true
+  bgp_allow:
+    - { proto: tcp, port: 179, from: 169.254.169.254/32 }
+    - { proto: tcp, port: 179, from: "2001:19f0:ffff::1/128" }
+
+vpc:
+  resource: vultr_vpc
+  region_bound: true
+  ipv6: false
+  max_per_location: 5
+  vpc2_status: deprecated_in_provider_2.25.0
+  cross_region: wireguard_required
+
+terraform:
+  provider: vultr/vultr
+  version: 2.32.0
+  released: 2026-07-14
+  opentofu_verified: 1.12.6
+  registry: registry.opentofu.org/vultr/vultr
+  provider_args: { api_key: env VULTR_API_KEY, rate_limit_ms: 500, retry_limit: 3 }
+  api_rate_limit_rps: 30
+
+limits:
+  api_rps: 30
+  new_account_instances: { default: 1, verify: true }
+  raise_limits: "Billing > Account limits > Request Limit Increase"
