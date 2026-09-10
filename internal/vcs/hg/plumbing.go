@@ -13,7 +13,7 @@ import (
 // This file holds the change-review plumbing (ADR 0012 §13). Mercurial
 // covers the read side with revsets; the write side (server-side merges,
 // commit creation, atomic ref transactions) has no working-copy-free
-// equivalent and returns ErrUnsupported. docs/mercurial.md discusses the
+// equivalent and returns vcs.ErrUnsupported. docs/mercurial.md discusses the
 // options.
 
 // exists returns ErrNotFound unless every id names a changeset.
@@ -56,6 +56,10 @@ func rangeSet(base, head vcs.RevisionID) string {
 // MergeBase implements vcs.Repository: ancestor(a, b).
 func (r *Repo) MergeBase(ctx context.Context, a, b vcs.RevisionID) (vcs.RevisionID, error) {
 	if err := checkIDs(a, b); err != nil {
+		return "", err
+	}
+	// ancestor(x, <empty>) is x, so unknown ids must be rejected first.
+	if err := r.exists(ctx, a, b); err != nil {
 		return "", err
 	}
 	return r.one(ctx, "ancestor("+revsetID(a)+", "+revsetID(b)+")")
@@ -120,7 +124,7 @@ func (r *Repo) RangeDiff(ctx context.Context, base1, head1, base2, head2 vcs.Rev
 	if err := checkIDs(base1, head1, base2, head2); err != nil {
 		return "", false, err
 	}
-	return "", false, ErrUnsupported
+	return "", false, vcs.ErrUnsupported
 }
 
 // FormatPatch implements vcs.Repository: `hg export --git -r only(head,
@@ -185,12 +189,12 @@ func (r *Repo) MergeTree(ctx context.Context, ours, theirs vcs.RevisionID) (stri
 	if err := checkIDs(ours, theirs); err != nil {
 		return "", nil, err
 	}
-	return "", nil, ErrUnsupported
+	return "", nil, vcs.ErrUnsupported
 }
 
 // CommitTree implements vcs.Repository. There are no tree objects to commit.
 func (r *Repo) CommitTree(ctx context.Context, tree string, parents []vcs.RevisionID, author, committer vcs.Signature, message string) (vcs.RevisionID, error) {
-	return "", ErrUnsupported
+	return "", vcs.ErrUnsupported
 }
 
 // UpdateRefs implements vcs.Repository. Named branches are changeset
@@ -205,12 +209,12 @@ func (r *Repo) UpdateRefs(ctx context.Context, updates []vcs.RefUpdate, reason s
 			return vcs.ErrBadRef
 		}
 	}
-	return ErrUnsupported
+	return vcs.ErrUnsupported
 }
 
 // RefsMatching implements vcs.Repository for the two namespaces Mercurial
 // can express: refs/heads/ (branches and bookmarks) and refs/tags/. Any
-// other prefix (refs/changes/, refs/for/) is ErrUnsupported.
+// other prefix (refs/changes/, refs/for/) is vcs.ErrUnsupported.
 func (r *Repo) RefsMatching(ctx context.Context, prefix string) ([]vcs.Ref, error) {
 	if prefix == "" || len(prefix) > 1024 || strings.ContainsAny(prefix, "\x00\"\\") {
 		return nil, vcs.ErrBadRef
@@ -223,7 +227,7 @@ func (r *Repo) RefsMatching(ctx context.Context, prefix string) ([]vcs.Ref, erro
 	case strings.HasPrefix(prefix, "refs/tags/") || prefix == "refs/tags":
 		refs, err = r.refs(ctx, false, true, "", "refs/tags/")
 	case strings.HasPrefix(prefix, "refs/"):
-		return nil, ErrUnsupported
+		return nil, vcs.ErrUnsupported
 	default:
 		return nil, vcs.ErrBadRef
 	}

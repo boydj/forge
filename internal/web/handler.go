@@ -83,6 +83,9 @@ type request struct {
 	id   *forge.Identity
 	auth error // result of Authenticate when a certificate was presented
 	segs []string
+	// pending is set by page(): the success header is written by send(), so
+	// a handler that fails after starting a page can still answer 4x/5x.
+	pending bool
 }
 
 // New returns a handler.
@@ -163,7 +166,7 @@ func (h *Handler) route(req *request) {
 
 // page starts a gemtext response and returns the page builder.
 func (req *request) page(title string) *gemini.Page {
-	_ = req.w.Header(gemini.StatusSuccess, "text/gemini; charset=utf-8; lang=en")
+	req.pending = true
 	p := gemini.NewPage()
 	if title != "" {
 		p.Heading(1, title)
@@ -172,6 +175,10 @@ func (req *request) page(title string) *gemini.Page {
 }
 
 func (req *request) send(p *gemini.Page) {
+	if req.pending && req.w.Status() == 0 {
+		_ = req.w.Header(gemini.StatusSuccess, "text/gemini; charset=utf-8; lang=en")
+	}
+	req.pending = false
 	_, _ = req.w.Write(p.Bytes())
 }
 

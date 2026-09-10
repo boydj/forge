@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,12 +132,12 @@ func adminInit(args []string) error {
 	cfg.SSH.Listen = strings.Split(*sshListen, ",")
 	if *sshPort != 0 {
 		cfg.SSH.Port = *sshPort
-	} else if _, p, ok := strings.Cut(cfg.SSH.Listen[0], ":"); ok {
+	} else if _, p, err := net.SplitHostPort(cfg.SSH.Listen[0]); err == nil {
 		fmt.Sscanf(p, "%d", &cfg.SSH.Port)
 	}
 	if *geminiPort != 0 {
 		cfg.Gemini.Port = *geminiPort
-	} else if _, p, ok := strings.Cut(cfg.Gemini.Listen[0], ":"); ok {
+	} else if _, p, err := net.SplitHostPort(cfg.Gemini.Listen[0]); err == nil {
 		fmt.Sscanf(p, "%d", &cfg.Gemini.Port)
 	}
 	if err := cfg.Validate(); err != nil {

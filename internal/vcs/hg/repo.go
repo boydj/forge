@@ -152,14 +152,16 @@ func (r *Repo) Resolve(ctx context.Context, ref string) (vcs.RevisionID, error) 
 	if len(ref) == 40 && isHex(ref) {
 		return r.one(ctx, revsetID(vcs.RevisionID(ref)))
 	}
-	q := "\"" + ref + "\""
+	// "literal:" stops Mercurial from reading the string as a pattern or,
+	// for branch(), as a changeset whose branch is wanted.
+	q := "\"literal:" + ref + "\""
 	cands := []string{
 		"present(bookmark(" + q + "))",
 		"present(tag(" + q + "))",
 		"present(max(branch(" + q + ")))",
 	}
 	if isHex(ref) {
-		cands = append(cands, "present(id("+q+"))")
+		cands = append(cands, "present(id(\""+ref+"\"))")
 	}
 	for _, c := range cands {
 		id, err := r.one(ctx, c)
@@ -267,29 +269,58 @@ func (r *Repo) Log(ctx context.Context, id vcs.RevisionID, opts vcs.LogOptions) 
 	return parseRevisions(out)
 }
 
-// manifestTemplate lists every file of a revision with its filenode, mode,
-// flags ("x" executable, "l" symlink) and size.
-const manifestTemplate = "{path}\\0{hash}\\0{mode}\\0{flags}\\0{size}\\0\\n"
+// manifestTemplate lists every file of a revision with its filenode and
+// size. The manifest template reports {mode} but not the symlink flag, so
+// flags ("x" executable, "l" symlink) come from `hg files` (filesTemplate).
+const manifestTemplate = "{path}\\0{hash}\\0{size}\\0\\n"
+
+const filesTemplate = "{path}\\0{flags}\\0\\n"
 
 type manifestEntry struct {
-	path, hash, mode, flags string
-	size                    int64
+	path, hash, flags string
+	size              int64
 }
 
-func (r *Repo) manifest(ctx context.Context, id vcs.RevisionID) ([]manifestEntry, error) {
+// manifest lists the files of a revision, optionally only those under dir.
+func (r *Repo) manifest(ctx context.Context, id vcs.RevisionID, dir string) ([]manifestEntry, error) {
 	out, err := r.run(ctx, "manifest", "-r", revsetID(id), "-T", manifestTemplate)
 	if err != nil {
 		return nil, notFoundOr(err)
 	}
 	var entries []manifestEntry
+	index := map[string]int{}
 	for _, line := range bytes.Split(out, []byte("\n")) {
 		f := strings.Split(string(line), "\x00")
-		if len(f) < 5 || f[0] == "" {
+		if len(f) < 3 || f[0] == "" {
 			continue
 		}
-		e := manifestEntry{path: f[0], hash: f[1], mode: f[2], flags: f[3]}
-		e.size, _ = strconv.ParseInt(f[4], 10, 64)
+		if dir != "" && f[0] != dir && !strings.HasPrefix(f[0], dir+"/") {
+			continue
+		}
+		e := manifestEntry{path: f[0], hash: f[1]}
+		e.size, _ = strconv.ParseInt(f[2], 10, 64)
+		index[e.path] = len(entries)
 		entries = append(entries, e)
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	args := []string{"files", "-r", revsetID(id), "-T", filesTemplate}
+	if dir != "" {
+		args = append(args, "--", "path:"+dir)
+	}
+	out, err = r.run(ctx, args...)
+	if err != nil {
+		return nil, notFoundOr(err)
+	}
+	for _, line := range bytes.Split(out, []byte("\n")) {
+		f := strings.Split(string(line), "\x00")
+		if len(f) < 2 || f[0] == "" {
+			continue
+		}
+		if i, ok := index[f[0]]; ok {
+			entries[i].flags = f[1]
+		}
 	}
 	return entries, nil
 }
@@ -305,12 +336,13 @@ func (r *Repo) Tree(ctx context.Context, id vcs.RevisionID, path string) ([]vcs.
 	if err != nil {
 		return nil, err
 	}
-	all, err := r.manifest(ctx, id)
+	all, err := r.manifest(ctx, id, path)
 	if err != nil {
 		return nil, err
 	}
 	if len(all) == 0 {
-		// Either the revision is unknown or the tree is empty.
+		// Either the revision is unknown, the path is absent, or the tree
+		// is empty.
 		if _, err := r.one(ctx, revsetID(id)); err != nil {
 			return nil, err
 		}

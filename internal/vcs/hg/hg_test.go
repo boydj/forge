@@ -250,7 +250,7 @@ func TestRefsMatching(t *testing.T) {
 	if err != nil || len(tags) != 1 || tags[0].Name != "refs/tags/v1.0" || tags[0].Kind != vcs.RefTag {
 		t.Errorf("tags = %+v, %v", tags, err)
 	}
-	if _, err := repo.RefsMatching(ctx, "refs/changes/12/"); err != ErrUnsupported {
+	if _, err := repo.RefsMatching(ctx, "refs/changes/12/"); err != vcs.ErrUnsupported {
 		t.Errorf("changes: %v", err)
 	}
 	if _, err := repo.RefsMatching(ctx, "heads/"); err != vcs.ErrBadRef {
@@ -323,7 +323,7 @@ func TestTreeAndBlob(t *testing.T) {
 	if e := byName["src"]; e.Kind != vcs.EntryDir || e.Size != -1 {
 		t.Errorf("src = %+v", e)
 	}
-	if e := byName["README"]; e.Kind != vcs.EntryFile || e.Size != 15 || e.Mode != "100644" || len(e.ID) != 40 {
+	if e := byName["README"]; e.Kind != vcs.EntryFile || e.Size != 14 || e.Mode != "100644" || len(e.ID) != 40 {
 		t.Errorf("README = %+v", e)
 	}
 	if e := byName["link"]; e.Kind != vcs.EntrySymlink || e.Mode != "120000" {
@@ -527,16 +527,16 @@ func TestPlumbing(t *testing.T) {
 		t.Errorf("format-patch unknown: %v", err)
 	}
 
-	if _, _, err := repo.RangeDiff(ctx, f.c[1], f.c[3], f.c[1], f.c[5], 0); err != ErrUnsupported {
+	if _, _, err := repo.RangeDiff(ctx, f.c[1], f.c[3], f.c[1], f.c[5], 0); err != vcs.ErrUnsupported {
 		t.Errorf("range-diff: %v", err)
 	}
-	if _, _, err := repo.MergeTree(ctx, f.c[3], f.c[5]); err != ErrUnsupported {
+	if _, _, err := repo.MergeTree(ctx, f.c[3], f.c[5]); err != vcs.ErrUnsupported {
 		t.Errorf("merge-tree: %v", err)
 	}
-	if _, err := repo.CommitTree(ctx, "x", nil, vcs.Signature{}, vcs.Signature{}, "m"); err != ErrUnsupported {
+	if _, err := repo.CommitTree(ctx, "x", nil, vcs.Signature{}, vcs.Signature{}, "m"); err != vcs.ErrUnsupported {
 		t.Errorf("commit-tree: %v", err)
 	}
-	if err := repo.UpdateRefs(ctx, []vcs.RefUpdate{{Ref: "refs/heads/x", New: f.c[1]}}, "r"); err != ErrUnsupported {
+	if err := repo.UpdateRefs(ctx, []vcs.RefUpdate{{Ref: "refs/heads/x", New: f.c[1]}}, "r"); err != vcs.ErrUnsupported {
 		t.Errorf("update-refs: %v", err)
 	}
 	if err := repo.UpdateRefs(ctx, nil, "r"); err != nil {

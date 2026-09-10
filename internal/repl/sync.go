@@ -60,6 +60,7 @@ func (n *Node) SyncOnce(ctx context.Context) error {
 	for _, peer := range n.peers {
 		if err := n.syncPeer(ctx, peer, 0); err != nil {
 			errs = append(errs, fmt.Errorf("peer %s: %w", peer, err))
+			n.markPeerUnreachable(ctx, peer, err)
 		}
 		if ctx.Err() != nil {
 			break
@@ -291,4 +292,25 @@ func (n *Node) syncRepoFrom(ctx context.Context, peer, addr string, rp *store.Re
 	}
 	n.log.Debug("replica synced", "repo", rp.Owner+"/"+rp.Name, "leader", peer, "git", needGit, "metadata", needMeta)
 	return nil
+}
+
+// markPeerUnreachable records a sync failure on every replica row of the
+// repositories led by peer so that `pop status` and the lag metric show a
+// dead leader instead of a frozen timestamp.
+func (n *Node) markPeerUnreachable(ctx context.Context, peer string, cause error) {
+	repos, err := n.opts.Store.AllRepos(ctx)
+	if err != nil {
+		return
+	}
+	for _, rp := range repos {
+		if rp.LeaderNode != peer {
+			continue
+		}
+		prev, _ := n.opts.Store.ReplicaFor(ctx, rp.ID, n.opts.Name)
+		p := &store.Replica{RepoID: rp.ID, Node: n.opts.Name, Status: store.ReplicaError, Detail: "peer unreachable: " + cause.Error()}
+		if prev != nil {
+			p.LastEventID = prev.LastEventID
+		}
+		_ = n.opts.Store.SetReplica(ctx, p)
+	}
 }

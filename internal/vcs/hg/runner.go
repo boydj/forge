@@ -25,12 +25,6 @@ import (
 	"as215520.net/forge/internal/vcs"
 )
 
-// ErrUnsupported is returned by operations Mercurial has no equivalent for
-// (server-side merges, commit creation, atomic ref transactions, range-diff).
-// It belongs in package vcs next to ErrConflict; it lives here only because
-// the prototype must not edit vcs.go.
-var ErrUnsupported = errors.New("hg: unsupported")
-
 // Options configure the backend.
 type Options struct {
 	// Binary is the hg executable; "hg" resolves from PATH.

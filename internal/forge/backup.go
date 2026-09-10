@@ -125,6 +125,12 @@ func (f *Forge) Restore(ctx context.Context, in string) error {
 		return err
 	}
 	tr := tar.NewReader(gz)
+	// Close the live database first: closing later would checkpoint the old
+	// WAL over the restored file.
+	_ = f.Store.Close()
+	for _, suffix := range []string{"", "-wal", "-shm"} {
+		_ = os.Remove(f.Config.DBPath() + suffix)
+	}
 	var bundles []string
 	for {
 		hdr, err := tr.Next()
@@ -165,7 +171,6 @@ func (f *Forge) Restore(ctx context.Context, in string) error {
 		_ = out.Close()
 	}
 	// Reopen the restored database and recreate repositories from bundles.
-	_ = f.Store.Close()
 	st, err := store.Open(ctx, f.Config.DBPath(), f.Config.Node)
 	if err != nil {
 		return err

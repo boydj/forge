@@ -133,6 +133,8 @@ var (
 	ErrIsDir      = errors.New("vcs: path is a directory")
 	ErrNotDir     = errors.New("vcs: path is not a directory")
 	ErrUnexpected = errors.New("vcs: unexpected tool output")
+	// ErrUnsupported is returned by adapters for operations the VCS lacks.
+	ErrUnsupported = errors.New("vcs: unsupported by this backend")
 	// ErrConflict is returned by UpdateRefs when a compare-and-swap fails
 	// (the ref moved, already exists, or is locked by another writer).
 	ErrConflict = errors.New("vcs: ref update conflict")
