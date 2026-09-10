@@ -61,3 +61,10 @@ for a working day costs about $0.20.
 Each extra Vultr POP is +$6 (`vhp-1c-1gb-intel`) or +$5 (`vc2-1c-1gb`); DNS
 and secrets scale at zero cost; BGP on Vultr carries no fee beyond the
 instance. Ten POPs worldwide are therefore ~$60-65 plus backups.
+
+## Monitoring
+
+| Item | Monthly | Notes |
+| --- | --- | --- |
+| Monitoring VM (Vultr `vc2-1c-1gb`, any region) | $5 | Prometheus + Grafana + blackbox exporter (`infra/monitoring/`); reachable over WireGuard only. Can be co-located on the first POP at $0 during Phase 1-2. |
+| Alert delivery | $0 | Alertmanager to email (existing mailbox) or a Misfin/Gemini notice later; no paid pager in the minimal configuration. |
