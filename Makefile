@@ -11,7 +11,7 @@ export CGO_ENABLED := 0
 export GOFLAGS := -mod=mod
 export PATH := $(HOME)/.local/go/bin:$(HOME)/go/bin:$(HOME)/.local/bin:$(CURDIR)/bin:$(PATH)
 
-.PHONY: all dev build test integration lint fmt vet run clean tidy tools infra-lint gen check
+.PHONY: all dev build test integration lint fmt vet run clean tidy tools infra-lint gen check dist
 
 all: build
 
@@ -66,6 +66,10 @@ run: build
 
 ## check: everything CI runs
 check: lint test integration
+
+## dist: build release binaries for linux/amd64 and linux/arm64 into ./dist
+dist:
+	./scripts/release
 
 tidy:
 	$(GO) mod tidy

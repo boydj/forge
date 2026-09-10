@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Build release artefacts: static binaries for linux/amd64 and linux/arm64,
+# SHA-256 sums, and a source tarball. Usage: scripts/release [vX.Y.Z]
+# With a version argument the tag must exist (create it first:
+#   git tag -a vX.Y.Z -m "forge vX.Y.Z" && scripts/release vX.Y.Z)
+set -euo pipefail
+cd "$(dirname "$0")/.."
+export PATH="$HOME/.local/go/bin:$PATH"
+VERSION=${1:-$(git describe --tags --always --dirty)}
+if [ -n "${1:-}" ] && ! git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+  echo "tag $VERSION does not exist" >&2; exit 1
+fi
+OUT=dist/$VERSION
+rm -rf "$OUT"; mkdir -p "$OUT"
+for target in linux/amd64 linux/arm64; do
+  os=${target%/*}; arch=${target#*/}
+  name="forge_${VERSION}_${os}_${arch}"
+  echo "building $name"
+  CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
+    -ldflags "-s -w -X as215520.net/forge/internal/version.Version=$VERSION" \
+    -o "$OUT/$name" ./cmd/forge
+done
+git archive --format=tar.gz --prefix="forge-$VERSION/" -o "$OUT/forge-$VERSION-src.tar.gz" HEAD
+(cd "$OUT" && sha256sum -- * > SHA256SUMS)
+echo "artefacts in $OUT:"; ls -l "$OUT"
