@@ -50,7 +50,7 @@ Pick the least drastic option that satisfies the report.
 **Make it read-only (archive)**: refuses pushes, new issues and comments;
 content stays visible. No CLI verb; as an administrator open
 `gemini://git.<zone>/~<owner>/<repo>/settings/archive` and answer
-`archive`. **PLANNED**: `forge admin repo archive`.
+`archive`, or from the CLI: `forge admin repo archive OWNER/NAME`.
 
 **Hide it (soft delete)**: disappears from every page, feed and clone
 immediately; restorable for 7 days, then purged by the nightly

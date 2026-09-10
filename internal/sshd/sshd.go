@@ -108,6 +108,9 @@ type Server struct {
 	Authz   Authorizer
 	Git     *git.Backend
 	HostKey ssh.Signer
+	// PreviousHostKeys are additionally offered during a host-key rotation
+	// overlap so clients that pinned the old key keep connecting.
+	PreviousHostKeys []ssh.Signer
 	// Logger receives structured logs; nil uses slog.Default().
 	Logger  *slog.Logger
 	Metrics Metrics
@@ -215,6 +218,9 @@ func (s *Server) newSSHConfig() *ssh.ServerConfig {
 		cfg.BannerCallback = func(ssh.ConnMetadata) string { return banner }
 	}
 	cfg.AddHostKey(s.HostKey)
+	for _, k := range s.PreviousHostKeys {
+		cfg.AddHostKey(k)
+	}
 	return cfg
 }
 

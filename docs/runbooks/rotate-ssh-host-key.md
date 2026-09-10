@@ -85,5 +85,5 @@ updated `known_hosts` get a second warning.
 
 - Only ed25519 is accepted by `sshd.LoadOrCreateHostKey`; do not try to
   stage an RSA or ECDSA key.
-- Dual host-key overlap (T-36) is **PLANNED**; until then the warning for
+- Dual host-key overlap (T-36): set `ssh.previous_host_key_file` in `forge.toml` to the old key for the overlap period; both keys are offered. Without it the warning for
   non-DNS clients is unavoidable.

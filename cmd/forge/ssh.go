@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -77,6 +78,17 @@ func startSSH(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *me
 	web.HostKeyLine = strings.TrimSpace(fmt.Sprintf("%s %s", cfg.Hostname, ssh.MarshalAuthorizedKey(pub)))
 	log.Info("ssh host key", "fingerprint", ssh.FingerprintSHA256(pub), "sshfp", sshd.SSHFPRecords(pub))
 
+	var previous []ssh.Signer
+	if p := cfg.SSH.PreviousHostKeyFile; p != "" {
+		if _, err := os.Stat(p); err == nil {
+			k, err := sshd.LoadOrCreateHostKey(p)
+			if err != nil {
+				return nil, fmt.Errorf("previous ssh host key: %w", err)
+			}
+			previous = append(previous, k)
+			log.Info("offering previous ssh host key during rotation", "fingerprint", ssh.FingerprintSHA256(k.PublicKey()))
+		}
+	}
 	srv := &sshd.Server{
 		Config: sshd.Config{
 			MaxAuthTries:     cfg.SSH.MaxAuthTries,
@@ -87,12 +99,13 @@ func startSSH(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *me
 			MaxConnsPerIP:    cfg.Limits.SSHMaxConnsPerIP,
 			HookSocket:       cfg.HookSocket(),
 		},
-		Auth:    sshAuth{f: app},
-		Authz:   sshAuth{f: app},
-		Git:     app.Git,
-		HostKey: hostKey,
-		Logger:  log.With("proto", "ssh"),
-		Metrics: reg.SSH(),
+		Auth:             sshAuth{f: app},
+		Authz:            sshAuth{f: app},
+		Git:              app.Git,
+		HostKey:          hostKey,
+		PreviousHostKeys: previous,
+		Logger:           log.With("proto", "ssh"),
+		Metrics:          reg.SSH(),
 	}
 	for _, addr := range cfg.SSH.Listen {
 		l, err := net.Listen("tcp", addr)

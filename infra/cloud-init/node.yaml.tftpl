@@ -29,6 +29,7 @@ packages:
   - zstd
   - unattended-upgrades
   - prometheus-node-exporter    # listens on :9101 (forge metrics own :9100), wg0-only via nftables
+  - sqlite3
 
 # OpenSSH: no passwords anywhere. root keeps the provider-injected bootstrap
 # key (prohibit-password); `deploy` is what scripts/deploy logs in as.

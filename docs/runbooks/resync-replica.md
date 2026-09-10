@@ -50,7 +50,7 @@ releases) from the leader. It is idempotent.
 
 ## Resync everything on a node
 
-There is no `resync --all`. **PLANNED**. Loop instead:
+`forge admin repo resync --all` resyncs every repository this node does not lead. To do one at a time instead:
 
 ```sh
 me=$(sudo -u forge forge admin status | awk '/^node:/{print $2}')

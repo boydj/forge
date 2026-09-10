@@ -12,6 +12,11 @@ func (h *Handler) front(req *request) {
 	p := req.page(h.F.Config.Title)
 	p.Text("A source forge on Gemini, Titan and Git over SSH.")
 	p.Blank()
+	if note, _ := h.F.Store.Setting(req.ctx, "announcement"); note != "" {
+		p.Heading(2, "Notice")
+		p.Text(note)
+		p.Blank()
+	}
 	if req.id != nil && req.id.User != nil {
 		p.Link("/~"+req.id.User.Name+"/", "your repositories")
 		p.Link("/new", "create a repository")

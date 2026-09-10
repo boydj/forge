@@ -53,7 +53,7 @@ rm next.crt
 
 - Front page and an announcement page on the forge (`docs/tls.md` step 2).
   The signed `/.well-known/forge/tls-rotation.gmi` page from the threat
-  model is **not implemented**; publish an ordinary page. **PLANNED**.
+  is `forge admin announce "TEXT"` (shown as a Notice on the front page; `--clear` removes it).
 - A note in the project repository (readable over SSH, whose host key is an
   independent identity).
 - A DNSSEC-signed `TXT` record with the new fingerprint. The

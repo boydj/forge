@@ -28,7 +28,9 @@ func adminUsage() {
   cert list USER | cert revoke SPKI | cert enrol-code USER
   repo list | repo create OWNER/NAME [--private] [--description TEXT]
   repo delete OWNER/NAME | repo restore OWNER/NAME | repo check OWNER/NAME | repo size OWNER/NAME
-  repo resync OWNER/NAME | repo move-leader OWNER/NAME NODE
+  repo resync OWNER/NAME | repo resync --all | repo move-leader OWNER/NAME NODE
+  repo archive OWNER/NAME | repo unarchive OWNER/NAME
+  announce TEXT | announce --clear      (notice shown on the front page)
   pop status | pop drain | pop undrain
   maintenance [--check]
   backup --out FILE.tar.gz | FILE.db
@@ -88,6 +90,14 @@ func runAdmin(args []string) error {
 		return adminRestore(ctx, app, rest[1:])
 	case "pop":
 		return adminPop(ctx, app, rest[1:])
+	case "announce":
+		if len(rest) == 2 && rest[1] == "--clear" {
+			return app.Store.SetSetting(ctx, "announcement", "")
+		}
+		if len(rest) < 2 {
+			return errors.New("announce TEXT | announce --clear")
+		}
+		return app.Store.SetSetting(ctx, "announcement", strings.Join(rest[1:], " "))
 	default:
 		adminUsage()
 		return fmt.Errorf("unknown command %q", rest[0])
@@ -408,9 +418,53 @@ func adminRepo(ctx context.Context, app *forge.Forge, args []string) error {
 		}
 		fmt.Printf("created %s/%s at %s\n", r.Owner, r.Name, app.RepoPath(r.Owner, r.Name))
 		return nil
+	case "archive", "unarchive":
+		if len(args) != 2 {
+			return fmt.Errorf("repo %s OWNER/NAME", args[0])
+		}
+		owner, name, err := splitRepo(args[1])
+		if err != nil {
+			return err
+		}
+		r, err := app.Store.RepoByPath(ctx, owner, name)
+		if err != nil {
+			return err
+		}
+		o, err := app.Store.UserByID(ctx, r.OwnerID)
+		if err != nil {
+			return err
+		}
+		arch := args[0] == "archive"
+		return app.UpdateRepo(ctx, o, r, forge.UpdateRepoOptions{Archived: &arch})
 	case "resync", "move-leader":
 		if len(args) < 2 {
 			return fmt.Errorf("repo %s OWNER/NAME [NODE]", args[0])
+		}
+		if args[0] == "resync" && args[1] == "--all" {
+			node, err := newReplNode(app)
+			if err != nil {
+				return err
+			}
+			repos, err := app.Store.AllRepos(ctx)
+			if err != nil {
+				return err
+			}
+			failed := 0
+			for _, r := range repos {
+				if r.LeaderNode == app.Config.Node {
+					continue
+				}
+				if err := node.Resync(ctx, r.ID); err != nil {
+					failed++
+					fmt.Fprintf(os.Stderr, "resync %s/%s: %v\n", r.Owner, r.Name, err)
+				} else {
+					fmt.Printf("resynced %s/%s\n", r.Owner, r.Name)
+				}
+			}
+			if failed > 0 {
+				return fmt.Errorf("%d repositories failed to resync", failed)
+			}
+			return nil
 		}
 		owner, name, err := splitRepo(args[1])
 		if err != nil {

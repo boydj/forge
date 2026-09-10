@@ -69,6 +69,9 @@ type SSH struct {
 	Listen []string `toml:"listen"`
 	// HostKeyFile is the OpenSSH private host key (ed25519). Generated if absent.
 	HostKeyFile string `toml:"host_key_file"`
+	// PreviousHostKeyFile, when present, is also offered to clients during a
+	// host-key rotation overlap (see docs/runbooks/rotate-ssh-host-key.md).
+	PreviousHostKeyFile string `toml:"previous_host_key_file"`
 	// Port used in clone instructions when not 22.
 	Port int `toml:"port"`
 	// User shown in clone URLs (the SSH login name is ignored by the server).

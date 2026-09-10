@@ -22,7 +22,7 @@ step is PLANNED, do the manual alternative shown.
 
 The `sqlite3` CLI used by some audit and repair steps is **not** installed
 by cloud-init or `deploy bootstrap`: `sudo apt-get install -y sqlite3`
-once per node before those steps (**PLANNED**: add it to the package list).
+once per node before those steps on nodes bootstrapped before 2026-09-10; cloud-init now installs it.
 
 Public ports: 1965 (Gemini/Titan), 22 (git over SSH). Operator SSH: 2200.
 Metrics: `http://[<wg address>]:9100/metrics` (loopback on a single node),
