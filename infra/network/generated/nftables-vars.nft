@@ -14,8 +14,8 @@ define node_unicast_blocks_v6 = { 2a0f:85c1:368:102::/64, 2a0f:85c1:368:101::/64
 define wg_mesh_v6 = fda5:bc65:9bb1:1::/64
 define wg_nodes_v6 = { fda5:bc65:9bb1:1::2, fda5:bc65:9bb1:1::1 }
 define wg_port = 51820
-# define wg_endpoints_v4: empty (no values known yet)
-# define wg_endpoints_v6: empty (no values known yet)
+define wg_endpoints_v4 = { 64.176.195.46 }
+define wg_endpoints_v6 = { 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3 }
 
 # BGP peers (TCP/179, multihop): allow in both directions
 define bgp_peers_v4 = { 169.254.169.254 }

@@ -16,7 +16,8 @@
 #   deploy status <pop>                           unit states, wg0, bird, last forge log lines
 #   deploy smoke <pop>                            Gemini + SSH banner checks only
 #
-# Environment: FORGE_ENV (dev), FORGE_ZONE (as215520.net), FORGE_ADMIN_PORT
+# Environment: FORGE_SSH_IDENTITY (private key for the deploy user),
+# FORGE_ENV (dev), FORGE_ZONE (as215520.net), FORGE_ADMIN_PORT
 # (2200), FORGE_DEPLOY_USER (deploy).
 #
 # Remote side (SR-19a): the `deploy` user may sudo exactly one command,
@@ -45,6 +46,8 @@ TOFU_DIR="$ROOT/infra/opentofu/environments/$ENV_NAME"
 KNOWN_HOSTS="$ROOT/infra/known_hosts"
 HELPER=/usr/local/sbin/forge-deploy-helper
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$KNOWN_HOSTS")
+# FORGE_SSH_IDENTITY selects the operator key (default: ssh's own identity search).
+[ -n "${FORGE_SSH_IDENTITY:-}" ] && SSH_OPTS+=(-i "$FORGE_SSH_IDENTITY" -o IdentitiesOnly=yes)
 DRY=0; BINARY=""; HOST=""; CONFIG_DIR=""; WITH_SECRETS=1; ROTATE_KEY=0; KH_LINE=""; KH_FP=""
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 

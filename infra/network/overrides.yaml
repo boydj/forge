@@ -1,0 +1,9 @@
+# Provider-assigned values for the live POPs (public data; from tofu output
+# and the nodes' WireGuard public keys). Used by: scripts/netgen --overrides.
+pops:
+  ewr1:
+    provider_ipv4: 64.176.195.46
+    provider_ipv6: "2001:19f0:4000:3e3a:5400:06ff:feac:7bb3"
+wireguard:
+  public_keys:
+    ewr1: "qoH6gKdZWIsqPHF33Dvv47BG2I9W56SPefw5qa8Nc2k="
