@@ -183,7 +183,9 @@ def validate_yaml(plan: dict, roas: dict) -> list[Result]:
     need(len(announced) >= 1, "plan: bgp.prefixes is empty")
 
     need(roas.get("asn") == asn, f"roas: asn {roas.get('asn')!r} != plan bgp.local_asn {asn!r}")
-    need(roas.get("expected_validation", "valid") == "valid", "roas: expected_validation must be 'valid'")
+    need(roas.get("expected_validation", "valid") in ("valid", "not-found"), "roas: expected_validation must be 'valid' or 'not-found'")
+    for r in roas.get("roas") or []:
+        need(r.get("expected_validation", "valid") in ("valid", "not-found"), f"roas: {r.get('prefix')}: expected_validation must be 'valid' or 'not-found'")
     seen: set[str] = set()
     for roa in roas.get("roas") or []:
         try:
@@ -228,11 +230,12 @@ def validate_yaml(plan: dict, roas: dict) -> list[Result]:
 
 def check_rpki(ctx: Context) -> list[Result]:
     out = []
-    want = ctx.roas.get("expected_validation", "valid")
+    default_want = ctx.roas.get("expected_validation", "valid")
     for roa in ctx.roas.get("roas") or []:
         prefix, asn, maxlen = roa["prefix"], roa["asn"], roa["max_length"]
+        want = roa.get("expected_validation", default_want)
         name = f"rpki:{prefix}"
-        expected = f"{want} (AS{asn} maxLength {maxlen})"
+        expected = f"{want} (AS{asn} maxLength {maxlen})" if want == "valid" else f"{want} (no ROA possible, ADR 0013)"
         url = f"{RIPESTAT}/rpki-validation/data.json?resource=AS{asn}&prefix={urllib.parse.quote(prefix, safe='')}"
         try:
             status, data = get_json(url)
@@ -252,6 +255,10 @@ def check_rpki(ctx: Context) -> list[Result]:
             actual += f" (ROA {ours[0].get('prefix')} maxLength {ours[0].get('max_length')})"
         elif roas:
             actual += " (covering ROAs: " + ", ".join(f"AS{r.get('origin')} {r.get('prefix')}/{r.get('max_length')}" for r in roas) + ")"
+        if want == "not-found":
+            ok = validity == "not-found"
+            out.append(Result(name, OK if ok else DRIFT, expected, actual, "" if ok else "a covering ROA appeared; if it names another origin the route is invalid (see desired-roas.yaml)"))
+            continue
         ok = validity == want and (not ours or int(ours[0].get("max_length", -1)) == int(maxlen))
         out.append(Result(name, OK if ok else DRIFT, expected, actual, "" if ok else f"ROA missing or wrong; see desired-roas.yaml ({roa.get('ca')})"))
     return out

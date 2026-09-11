@@ -26,15 +26,15 @@ locals {
   # stays in Connect/Active, add tcp/179 from 169.254.169.254/32 and
   # 2001:19f0:ffff::1/128 via extra_firewall_rules.
   base_rules = {
-    ssh_forge_v4 = { protocol = "tcp", ip_type = "v4", subnet = "0.0.0.0/0", subnet_size = 0, port = "22", notes = "forge git-over-ssh" }
+    ssh_forge_v4 = { protocol = "tcp", ip_type = "v4", subnet = "0.0.0.0", subnet_size = 0, port = "22", notes = "forge git-over-ssh" }
     ssh_forge_v6 = { protocol = "tcp", ip_type = "v6", subnet = "::", subnet_size = 0, port = "22", notes = "forge git-over-ssh" }
-    gemini_v4    = { protocol = "tcp", ip_type = "v4", subnet = "0.0.0.0/0", subnet_size = 0, port = "1965", notes = "gemini/titan" }
+    gemini_v4    = { protocol = "tcp", ip_type = "v4", subnet = "0.0.0.0", subnet_size = 0, port = "1965", notes = "gemini/titan" }
     gemini_v6    = { protocol = "tcp", ip_type = "v6", subnet = "::", subnet_size = 0, port = "1965", notes = "gemini/titan" }
-    ssh_admin_v4 = { protocol = "tcp", ip_type = "v4", subnet = "0.0.0.0/0", subnet_size = 0, port = "2200", notes = "openssh admin" }
+    ssh_admin_v4 = { protocol = "tcp", ip_type = "v4", subnet = "0.0.0.0", subnet_size = 0, port = "2200", notes = "openssh admin" }
     ssh_admin_v6 = { protocol = "tcp", ip_type = "v6", subnet = "::", subnet_size = 0, port = "2200", notes = "openssh admin" }
-    wireguard_v4 = { protocol = "udp", ip_type = "v4", subnet = "0.0.0.0/0", subnet_size = 0, port = "51820", notes = "wireguard mesh (peers unknown at create time)" }
+    wireguard_v4 = { protocol = "udp", ip_type = "v4", subnet = "0.0.0.0", subnet_size = 0, port = "51820", notes = "wireguard mesh (peers unknown at create time)" }
     wireguard_v6 = { protocol = "udp", ip_type = "v6", subnet = "::", subnet_size = 0, port = "51820", notes = "wireguard mesh (peers unknown at create time)" }
-    icmp_v4      = { protocol = "icmp", ip_type = "v4", subnet = "0.0.0.0/0", subnet_size = 0, port = null, notes = "icmp (ping, pmtud)" }
+    icmp_v4      = { protocol = "icmp", ip_type = "v4", subnet = "0.0.0.0", subnet_size = 0, port = null, notes = "icmp (ping, pmtud)" }
     icmp_v6      = { protocol = "icmp", ip_type = "v6", subnet = "::", subnet_size = 0, port = null, notes = "icmpv6 (nd, pmtud)" }
   }
   firewall_rules = var.create_firewall ? merge(local.base_rules, var.extra_firewall_rules) : {}

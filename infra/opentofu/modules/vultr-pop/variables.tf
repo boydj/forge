@@ -55,7 +55,7 @@ variable "create_firewall" {
 }
 
 variable "extra_firewall_rules" {
-  description = "Additional inbound rules for the created firewall group, keyed by a stable name. protocol: tcp|udp|icmp|gre|esp|ah; ip_type: v4|v6; port: \"22\" or \"8000:9000\" (tcp/udp only); subnet + subnet_size: source (0.0.0.0/0 or ::/0 for anywhere)."
+  description = "Additional inbound rules for the created firewall group, keyed by a stable name. protocol: tcp|udp|icmp|gre|esp|ah; ip_type: v4|v6; port: \"22\" or \"8000:9000\" (tcp/udp only); subnet + subnet_size: source address and prefix length as separate fields (0.0.0.0 + 0 or :: + 0 for anywhere; the provider rejects CIDR notation)."
   type = map(object({
     protocol    = string
     ip_type     = string

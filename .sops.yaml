@@ -17,7 +17,7 @@ creation_rules:
     unencrypted_regex: "^schema_version$"
     key_groups:
       - age:
-          - age1operatorplaceholder000000000000000000000000000000000000000000  # operator (replace)
+          - age1zv5xvjyyr9a4ydg2209slwawza0vjfa8zwu9v22fnnz7kz307pesezvwae 
           # - age1secondoperator...                                            # second operator / CI
           # - age1node_ewr1...   # infra/secrets/nodes/ewr1.age.pub (optional, see above)
 
@@ -25,4 +25,4 @@ creation_rules:
   - path_regex: infra/secrets/.*\.enc\.yaml$
     key_groups:
       - age:
-          - age1operatorplaceholder000000000000000000000000000000000000000000  # operator (replace)
+          - age1zv5xvjyyr9a4ydg2209slwawza0vjfa8zwu9v22fnnz7kz307pesezvwae 

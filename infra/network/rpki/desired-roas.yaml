@@ -30,7 +30,11 @@ roas:
       - "https://rpki-validator.ripe.net/ui/2a0f:85c1:368::/48"
       - "https://bgp.tools/prefix/2a0f:85c1:368::/48#rpki"
 
+  # ADR 0013: no ROA is possible for this prefix (ARDC cannot create one; ARIN
+  # offers no RPKI/IRR for legacy resources without a service agreement).
+  # Expected validation state is not-found ("unknown"); Vultr accepts it.
   - prefix: "44.32.58.0/24"
+    expected_validation: not-found   # ADR 0013
     max_length: 24
     asn: 215520
     ca: arin-hosted-via-ardc        # ARIN hosted RPKI on ARDC's 44.0.0.0/9 certificate

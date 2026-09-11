@@ -74,8 +74,9 @@ def all_good() -> dict[str, tuple[int, str]]:
     return {
         f"rpki-validation/data.json?resource=AS215520&prefix={V6.replace(':', '%3A').replace('/', '%2F')}":
             (200, ripestat({"status": "valid", "validating_roas": [{"origin": "215520", "prefix": V6, "validity": "valid", "max_length": 48}]})),
+        # ADR 0013: no ROA is possible for the /24; the expected state is not-found.
         "rpki-validation/data.json?resource=AS215520&prefix=44.32.58.0%2F24":
-            (200, ripestat({"status": "valid", "validating_roas": [{"origin": "215520", "prefix": V4, "validity": "valid", "max_length": 24}]})),
+            (200, ripestat({"status": "not-found", "validating_roas": []})),
         "routing-status/data.json?resource=44.32.58.0%2F24":
             (200, ripestat({"visibility": {"v4": {"ris_peers_seeing": 330, "total_ris_peers": 340}, "v6": {"ris_peers_seeing": 0, "total_ris_peers": 0}},
                             "origins": [{"origin": 215520, "route_objects": ["RADB"]}]})),
