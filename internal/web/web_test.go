@@ -720,3 +720,12 @@ func TestStatusPage(t *testing.T) {
 		t.Errorf("/status/ without docs: %d\n%s", status, body)
 	}
 }
+
+func TestMarkdownTable(t *testing.T) {
+	md := "Intro.\n\n| Page | Path |\n| --- | --- |\n| Front | `/` |\n| A [user](/~u/) page | /~user/ |\n\nAfter.\n"
+	got := MarkdownToGemtext(md, "/docs/")
+	want := "Intro.\n\n```table\nPage         Path\nFront        /\nA user page  /~user/\n```\n=> /~u/ user [readme link]\n\nAfter.\n\n"
+	if got != want {
+		t.Errorf("table rendering:\n got: %q\nwant: %q", got, want)
+	}
+}

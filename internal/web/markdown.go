@@ -4,6 +4,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"as215520.net/forge/internal/gemini"
 )
@@ -12,6 +13,8 @@ var (
 	mdLinkRe  = regexp.MustCompile(`\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 	mdImageRe = regexp.MustCompile(`!\[([^\]]*)\]\(([^)\s]+)\)`)
 	mdInline  = regexp.MustCompile("(\\*\\*|__|`)(.+?)(\\*\\*|__|`)")
+	// tableSeparator is the |---|:--:| row between a table's header and body.
+	tableSeparator = regexp.MustCompile(`^\|[\s:|-]+\|$`)
 )
 
 // MarkdownToGemtext converts a practical subset of Markdown to gemtext:
@@ -25,7 +28,46 @@ func MarkdownToGemtext(md, base string) string {
 	var links [][2]string
 	inFence := false
 	fenceAlt := ""
+	var table [][]string
+	// flushTable renders buffered table rows as an aligned preformatted
+	// block (the gemtext convention for tables); links from cells were
+	// already hoisted into links by extract and follow the block.
+	flushTable := func() {
+		if len(table) == 0 {
+			return
+		}
+		rows := table
+		table = nil
+		width := map[int]int{}
+		for _, r := range rows {
+			for i, c := range r {
+				if n := utf8.RuneCountInString(c); n > width[i] {
+					width[i] = n
+				}
+			}
+		}
+		out.WriteString("```table\n")
+		for _, r := range rows {
+			var b strings.Builder
+			for i, c := range r {
+				if i > 0 {
+					b.WriteString("  ")
+				}
+				b.WriteString(c)
+				if i < len(r)-1 {
+					b.WriteString(strings.Repeat(" ", width[i]-utf8.RuneCountInString(c)))
+				}
+			}
+			line := strings.TrimRight(b.String(), " ")
+			if strings.HasPrefix(line, "```") {
+				line = " " + line
+			}
+			out.WriteString(line + "\n")
+		}
+		out.WriteString("```\n")
+	}
 	flush := func() {
+		flushTable()
 		if len(para) > 0 {
 			text := strings.Join(para, " ")
 			out.WriteString(gemini.EscapeLine(stripInline(text)))
@@ -115,6 +157,18 @@ func MarkdownToGemtext(md, base string) string {
 			flush()
 			out.WriteString("* " + stripInline(extract(trim)) + "\n")
 			flush()
+		case strings.HasPrefix(trim, "|") && strings.HasSuffix(trim, "|") && len(trim) > 1:
+			if len(para) > 0 {
+				flush()
+			}
+			if tableSeparator.MatchString(trim) {
+				continue // the header/body separator row
+			}
+			cells := strings.Split(trim[1:len(trim)-1], "|")
+			for i, c := range cells {
+				cells[i] = stripInline(extract(strings.TrimSpace(c)))
+			}
+			table = append(table, cells)
 		default:
 			para = append(para, extract(trim))
 		}

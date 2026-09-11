@@ -55,7 +55,7 @@ prototype and M6 desired state are done.
 - Status page: `/status/` renders the fleet from the control plane
   (health verdict, announcement state, per-check results, replication lag,
   uptime per POP; component and anycast summary; banner) plus the newest
-  incident reports from `docs/incidents/`, also served as `/status/feed`
+  incident reports from `docs/site/incidents/`, also served as `/status/feed`
   (gemfeed) and `/status/atom.xml`. No monitoring host needed.
 - Provider evaluation (M9): `docs/research/na-bgp-providers.md`.
 - Push forwarding: a `git push` that reaches a replica is relayed to the

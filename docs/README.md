@@ -1,10 +1,11 @@
-# Forge documentation
+# Forge documentation (internal)
 
 A source forge on Gemini, Titan and Git over SSH, served anycast from
-AS215520. This directory is the documentation site: it is published at
-`/docs/` straight from the repository, so a git push is a docs deploy.
-Everything else about the project, including the infrastructure, is code in
-the same repository.
+AS215520. This index covers how the forge is built and run. The **user
+guide**, published at `gemini://git.as215520.net/docs/`, is
+[`site/`](site/README.md); a git push to it is a docs deploy. Everything
+else about the project, including the infrastructure, is code in the same
+repository.
 
 ## Using the forge
 

@@ -87,11 +87,18 @@ is kept warm.
 
 ## The documentation site
 
-`gemini://git.as215520.net/docs/` is this directory, read straight from
-`jdb/forge` at its default branch (`docs.repo` in `forge.toml`, rendered by
-`modules/forge-node`). There is no build step and no second copy: a git
-push that changes a file under `docs/` is a docs deploy, replicated to every
-POP with the repository. Markdown and gemtext render inline with relative
-links rebased, so the same files read correctly on GitHub, in a clone and on
-the site; the index is `docs/README.md`. Only a public repository can be the
-documentation source, whoever is asking.
+`gemini://git.as215520.net/docs/` is `docs/site/` of this repository, read
+straight from `jdb/forge` at its default branch (`docs.repo` and
+`docs.path` in `forge.toml`, rendered by `modules/forge-node`). It is the
+**user guide**: how to get an account, clone and push, open issues, propose
+changes, subscribe to feeds, and what to pin. The rest of `docs/` (this
+file, architecture, operations, runbooks, decisions) is for people working
+on the forge and is not published. Incident reports are
+`docs/site/incidents/`, which the status page and its feeds read.
+
+There is no build step and no second copy: a git push that changes a file
+under `docs/site/` is a docs deploy, replicated to every POP with the
+repository. Markdown renders with relative links rebased, so the same
+files read correctly on GitHub, in a clone and on the site; the index is
+`docs/site/README.md`. Only a public repository can be the documentation
+source, whoever is asking.

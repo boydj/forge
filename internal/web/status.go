@@ -169,7 +169,7 @@ func (h *Handler) statusPage(req *request) {
 		var verdict string
 		switch {
 		case seen == 0:
-			verdict = "no data"
+			verdict = "not checked"
 		case ok == seen:
 			verdict = "operational"
 		case ok > 0:

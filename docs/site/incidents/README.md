@@ -1,7 +1,7 @@
 # Incidents
 
-Incident reports live here, one file per incident, and feed the status
-page. The status page at `/status/` lists the ten newest; `/status/feed`
+Incident reports for git.as215520.net live here, one file per incident,
+and feed the status page. The status page at `/status/` lists the ten newest; `/status/feed`
 is a gemfeed and `/status/atom.xml` an Atom feed of all of them, so anyone
 can subscribe to incidents the way they subscribe to a repository. Writing
 an incident is a git push: there is no other system to update.
@@ -36,5 +36,5 @@ sgp1"). The body is free-form. A useful shape:
 
 Update the file as the incident evolves; the page always shows the current
 text, and the status page banner is computed live from the fleet, not from
-these files. The runbook for the human side is
-`runbooks/incident-checklist.md`.
+these files. The operator's checklist is `docs/runbooks/incident-checklist.md` in the
+repository (not published here).

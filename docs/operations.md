@@ -214,7 +214,7 @@ anycast prefixes and how many are reachable over the control plane, one
 line per point of presence (announcement state, health verdict with the
 failing checks, replication lag in events, version, uptime, when it was
 last seen), and the ten newest incident reports from `docs.incidents` in
-the documentation repository (`docs/incidents/README.md` gives the file
+the documentation repository (`docs/site/incidents/README.md` gives the file
 format). `/status/feed` and `/status/atom.xml` serve the incidents as a
 gemfeed and an Atom feed.
 
