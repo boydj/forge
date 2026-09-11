@@ -23,9 +23,9 @@ org:            ORG-JB158-RIPE
 sponsoring-org: ORG-ICL64-RIPE
 remarks:        ----------------------------------------------------------
 remarks:        Originates exactly two prefixes, both anycast:
-remarks:          44.32.58.0/24      (ARDC 44Net; no ROA possible, RPKI not-found)
-remarks:          2a0f:85c1:368::/48 (RIPE ROA, maxLength 48)
-remarks:        as-set: AS215520:AS-ALL   (RIPE::AS215520:AS-ALL in PeeringDB)
+remarks:        44.32.58.0/24 (ARDC 44Net; no ROA possible, RPKI not-found)
+remarks:        2a0f:85c1:368::/48 (RIPE ROA, maxLength 48)
+remarks:        as-set: AS215520:AS-ALL (RIPE::AS215520:AS-ALL in PeeringDB)
 remarks:        ----------------------------------------------------------
 remarks:        --- IPv4 transit: Vultr / The Constant Company ---
 import:         from AS20473 accept ANY
@@ -38,10 +38,10 @@ remarks:        (carries 2a0f:85c1:368::/48 today; remove after migration)
 mp-import:      afi ipv6.unicast from AS835 accept ANY
 mp-export:      afi ipv6.unicast to AS835 announce AS215520:AS-ALL
 remarks:        ----------------------------------------------------------
-remarks:        abuse:   abuse@unplanks.com  (abuse-c ACRO55456-RIPE)
-remarks:        noc:     boydjd@jbip.net
-remarks:        web:     https://as215520.net
-remarks:        gemini:  gemini://git.as215520.net/
+remarks:        abuse: abuse@unplanks.com (abuse-c ACRO55456-RIPE)
+remarks:        noc: boydjd@jbip.net
+remarks:        web: https://as215520.net
+remarks:        gemini: gemini://git.as215520.net/
 remarks:        peering: open policy, see PeeringDB net 35354
 remarks:        ----------------------------------------------------------
 admin-c:        JB21841-RIPE
