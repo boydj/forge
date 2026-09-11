@@ -35,13 +35,15 @@ Type=simple
 # needs read/write on it, hence the supplementary group rather than root.
 DynamicUser=yes
 SupplementaryGroups=bird
+# Flags as in the 1.4.2 build (`prometheus-bird-exporter -h`): bgp, static
+# and kernel stay on (default), the protocols BIRD does not run here are off.
+# There is no -proto.device or -proto.rip flag; passing one exits 2.
 ExecStart=/usr/bin/prometheus-bird-exporter \
     -web.listen-address=:9324 \
     -bird.v2 \
     -bird.socket=/run/bird/bird.ctl \
     -format.new \
-    -proto.bgp -proto.static -proto.kernel -proto.device \
-    -proto.ospf=false -proto.babel=false -proto.rip=false -proto.direct=false
+    -proto.ospf=false -proto.babel=false -proto.bfd=false -proto.rpki=false -proto.direct=false
 Restart=on-failure
 RestartSec=5
 
