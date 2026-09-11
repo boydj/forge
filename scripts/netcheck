@@ -256,7 +256,8 @@ def check_rpki(ctx: Context) -> list[Result]:
         elif roas:
             actual += " (covering ROAs: " + ", ".join(f"AS{r.get('origin')} {r.get('prefix')}/{r.get('max_length')}" for r in roas) + ")"
         if want == "not-found":
-            ok = validity == "not-found"
+            # RIPEstat reports an uncovered prefix as "unknown" (RFC 6811 NotFound).
+            ok = validity in ("not-found", "unknown")
             out.append(Result(name, OK if ok else DRIFT, expected, actual, "" if ok else "a covering ROA appeared; if it names another origin the route is invalid (see desired-roas.yaml)"))
             continue
         ok = validity == want and (not ours or int(ours[0].get("max_length", -1)) == int(maxlen))
