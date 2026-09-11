@@ -30,7 +30,7 @@ locals {
       for name, n in var.nodes : "${name}-aaaa" => {
         node    = name
         type    = "AAAA"
-        content = n.ipv6
+        content = cidrhost("${n.ipv6}/128", 0) # canonical form, as Cloudflare stores it
       } if n.ipv6 != null
     },
   )
@@ -102,7 +102,7 @@ resource "cloudflare_dns_record" "service_aaaa" {
   zone_id = local.zone_id
   name    = local.service_fqdn
   type    = "AAAA"
-  content = each.value
+  content = cidrhost("${each.value}/128", 0) # canonical form, as Cloudflare stores it
   ttl     = var.ttl
   proxied = false # Gemini/SSH are not HTTP; see header comment.
   comment = "${var.comment}: anycast v6"

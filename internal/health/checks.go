@@ -138,8 +138,10 @@ func BuiltinChecks(cfg Config, db Pinger, lag func() (int64, error)) []Check {
 	return checks
 }
 
-// GeminiCheck opens a TLS connection to addr, requests
-// gemini://<hostname>/status and expects a 20 response. The certificate is
+// GeminiCheck opens a TLS connection to addr, requests the front page
+// (gemini://<hostname>/) and expects a 20 response. It must not request
+// /status: that page reports this controller's own verdict, which would
+// make the check circular (a starting node could never become healthy). The certificate is
 // self-signed (TOFU), so verification is skipped; the point is that the
 // daemon answers, not who it is.
 func GeminiCheck(addr, hostname string) Check {
@@ -164,7 +166,7 @@ func GeminiCheck(addr, hostname string) Check {
 		if err := conn.HandshakeContext(ctx); err != nil {
 			return fmt.Errorf("tls: %w", err)
 		}
-		if _, err := fmt.Fprintf(conn, "gemini://%s/status\r\n", hostname); err != nil {
+		if _, err := fmt.Fprintf(conn, "gemini://%s/\r\n", hostname); err != nil {
 			return err
 		}
 		line, err := bufio.NewReader(conn).ReadString('\n')

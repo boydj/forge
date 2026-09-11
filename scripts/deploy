@@ -216,7 +216,8 @@ push_secrets() { # push_secrets <target> <pop>
     printf '%s\n' "$bk" | age-keygen -y > "$d/backup.recipient" 2>/dev/null || true
   fi
   for f in "$d"/tls/* "$d"/ssh/* "$d"/*; do [ -f "$f" ] && [ ! -s "$f" ] && rm -f "$f"; done
-  grep -rl '^REPLACE' "$d" 2>/dev/null | while read -r f; do log "WARNING: placeholder value in ${f#$d/}"; rm -f "$f"; done
+  # grep exits 1 when nothing matches; do not let pipefail abort the deploy.
+  { grep -rl '^REPLACE' "$d" 2>/dev/null || true; } | while read -r f; do log "WARNING: placeholder value in ${f#$d/}"; rm -f "$f"; done
   chmod -R go-rwx "$d"
   tar -C "$d" -cf - . | age -r "$recip" -o "$tmp/secrets.tar.age"
   rm -rf "$d"
@@ -235,10 +236,17 @@ smoke() { # smoke <pop> - against the node's own unicast name (not the anycast n
   local ok=1
   if command -v openssl >/dev/null 2>&1; then
     local conn="$h:1965"; case "$h" in *:*) conn="[$h]:1965";; esac # bracket IPv6 literals only
-    local resp; resp=$(printf 'gemini://git.%s/status\r\n' "$ZONE" | timeout 10 openssl s_client -quiet -connect "$conn" -servername "git.$ZONE" 2>/dev/null | head -1 || true)
+    # The health controller reports 41 "starting" until several check cycles
+    # have passed (docs/health.md); allow up to two minutes for that.
+    local resp="" i
+    for i in $(seq 1 24); do
+      resp=$(printf 'gemini://git.%s/status\r\n' "$ZONE" | timeout 10 openssl s_client -quiet -nocommands -connect "$conn" -servername "git.$ZONE" 2>/dev/null | head -1 | tr -d '\r' || true)
+      case "$resp" in 2*|3*) break;; 41*starting*) sleep 5;; *) break;; esac
+    done
     case "$resp" in 2*|3*) log "gemini: $resp";; *) log "gemini FAILED: '${resp:-no response}'"; ok=0;; esac
   fi
-  local banner; banner=$(timeout 5 bash -c "exec 3<>/dev/tcp/$h/22; head -c 64 <&3" 2>/dev/null | tr -d '\r' | head -1 || true)
+  # Read one line: the banner is shorter than 64 bytes, so head -c would wait.
+  local banner; banner=$(timeout 5 bash -c "exec 3<>/dev/tcp/$h/22; head -n 1 <&3" 2>/dev/null | tr -d '\r' || true)
   case "$banner" in SSH-2.0*) log "ssh: $banner";; *) log "ssh FAILED: '${banner:-no banner}'"; ok=0;; esac
   [ "$ok" = 1 ] || die "smoke test failed on $pop"
 }

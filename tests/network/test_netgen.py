@@ -218,8 +218,11 @@ class NetgenTest(unittest.TestCase):
         conf = tree(out)["infra/bird/generated/ewr1/bird.conf"]
         self.assertIn("router id __PROVIDER_IPV4__;", conf)
         wg = tree(out)["infra/wireguard/generated/ewr1/wg0.conf"]
-        self.assertIn("PublicKey = __WG_PUBKEY_ams1__", wg)
-        self.assertIn("Endpoint = __WG_ENDPOINT_ams1__:51820", wg)
+        # Peers without a known public key are left out (commented) so the
+        # file stays loadable by wg-quick on a partially provisioned mesh.
+        self.assertNotIn("__WG_PUBKEY_", wg)
+        self.assertIn("# [Peer] ams1: not yet provisioned", wg)
+        self.assertNotIn("__WG_ENDPOINT_", wg)
 
     def test_state_conf_initially_withdrawn(self) -> None:
         for pop in self.pops:

@@ -14,6 +14,7 @@ module "node" {
   unicast_v6_block = var.unicast_v6_block
   wg_address       = var.wg_address
   cluster_enabled  = var.cluster_enabled
+  bgp_announce     = var.bgp_announce
 
   operator_ssh_public_keys = coalesce(
     var.operator_ssh_public_keys,

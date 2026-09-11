@@ -616,13 +616,19 @@ def render_wg(plan: dict, pop: Pop, pops: list[Pop]) -> str:
         lines.append("# (no peers in this mesh group)")
     for peer in peers:
         host = peer.wg_endpoint_host(wg.get("endpoint_preference", ["provider_ipv6", "provider_ipv4"]))
-        if host is None:
-            endpoint = f"__WG_ENDPOINT_{peer.name}__:{peer.wg_listen_port}"
-        elif ":" in host:
+        pubkey = keys.get(peer.name)
+        if host is None or not pubkey:
+            # A peer whose public key or endpoint is not known yet is left out
+            # (commented) so the file stays loadable by wg-quick; it appears
+            # once overrides carry its values.
+            lines += [f"# [Peer] {peer.name}: not yet provisioned (missing "
+                      + ("endpoint" if host is None else "public key") + "); rerun netgen with overrides",
+                      ""]
+            continue
+        if ":" in host:
             endpoint = f"[{host}]:{peer.wg_listen_port}"
         else:
             endpoint = f"{host}:{peer.wg_listen_port}"
-        pubkey = keys.get(peer.name) or f"__WG_PUBKEY_{peer.name}__"
         lines += [
             "[Peer]",
             f"# {peer.name} ({peer.provider} {peer.region}) index {peer.index}",

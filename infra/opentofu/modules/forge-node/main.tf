@@ -37,6 +37,7 @@ locals {
     metrics_listen   = local.metrics_listen
     cluster_enabled  = local.cluster_enabled
     control_listen   = local.control_listen
+    announcer        = var.bgp_announce ? "/usr/local/bin/bgp-announce" : ""
   })
 
   cloud_init = templatefile("${local.repo_root}/infra/cloud-init/node.yaml.tftpl", {

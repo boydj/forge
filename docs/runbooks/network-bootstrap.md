@@ -261,6 +261,20 @@ S= sudo birdc show route export vultr4  # empty: ANNOUNCE=false
 S= bgp-announce status                  # withdrawn
 ```
 
+7a'. The gate. `forge.toml` only carries `health.announcer` when the POP's
+`bgp_announce` variable is true (`infra/opentofu/environments/dev/dev.auto.tfvars`);
+without it the health controller runs checks but never calls `bgp-announce`.
+Going live is therefore: set `bgp_announce = true`, `scripts/deploy ewr1`, and
+watch `journalctl -u forge | grep -i announce` on the node. The controller
+announces after six green 10 s ticks and a 120 s cooldown. Manual
+`bgp-announce announce` (7b) is the equivalent one-off; the controller keeps
+whatever it finds if it is not configured.
+
+Phase 1 note: while the announcement is off, `git.<zone>` A/AAAA point at
+the node's provider addresses (`anycast_v4/v6` in the dev tfvars). After 7b
+succeeds, put the plan's anycast addresses back (`44.32.58.1`,
+`2a0f:85c1:368:1::1`) and `tofu apply`; the node already has them on `dummy0`.
+
 7b. Staged test while Toronto still announces the /48 (option (b) test from
 architecture section 6): announce, then check from several vantage points.
 Toronto-catchment probes (RIPE Atlas, a Xenyth-hosted host, `mtr` from

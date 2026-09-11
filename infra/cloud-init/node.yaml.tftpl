@@ -383,6 +383,7 @@ write_files:
       protocol device { scan time 10; }
       include "/etc/bird/state.conf";
   - path: /etc/bird/state.conf
+    owner: root:bird          # bird (user bird) must read it; bgp-announce rewrites it
     permissions: "0640"
     defer: true
     content: |
@@ -437,6 +438,9 @@ runcmd:
   - [systemctl, enable, --now, forge-secrets.service]
   - [systemctl, enable, forge.service, forge-maintenance.timer, forge-backup.timer, wg-quick@wg0.service]
   - [systemctl, enable, --now, bird, prometheus-node-exporter, unattended-upgrades]
+  # apt started node-exporter before write_files placed its ARGS (:9101);
+  # restart so it releases :9100 for forge metrics.
+  - [systemctl, restart, prometheus-node-exporter]
   - [systemctl, start, forge-maintenance.timer, forge-backup.timer]
   # Console lines for the operator: age recipient, and the sshd host key for
   # `scripts/deploy init-node --known-hosts-line` / `--hostkey-fingerprint`

@@ -87,6 +87,7 @@ def render_toml():
             "ssh_listen": '[":22"]',
             "metrics_listen": "[fd42::1]:9100",
             "cluster_enabled": "true",
+            "announcer": "",
             "control_listen": "[fd42::1]:9200",
         },
         {},
@@ -315,7 +316,7 @@ class NftablesTemplate(unittest.TestCase):
     def test_renders_and_mentions_ports(self):
         out = render_nftables()
         self.assertNotIn("${", out)
-        for needle in ("policy drop", "ADMIN_SSH  = 2200", "{ 22, 1965 }", "udp dport WG_PORT", "iifname WG_IF tcp dport PRIVATE_TCP"):
+        for needle in ("policy drop", "ADMIN_SSH  = 2200", "{ 22, 1965 }", "udp dport $WG_PORT", "iifname $WG_IF tcp dport $PRIVATE_TCP"):
             self.assertIn(needle, out)
 
 

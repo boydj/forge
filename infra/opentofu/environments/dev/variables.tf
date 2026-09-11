@@ -120,3 +120,9 @@ variable "cluster_enabled" {
   type        = bool
   default     = false
 }
+
+variable "bgp_announce" {
+  description = "Enable anycast announcement on the dev POP (M7 go-live). See docs/runbooks/network-bootstrap.md."
+  type        = bool
+  default     = false
+}

@@ -34,3 +34,4 @@ bootstrap_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample00000000
 unicast_v6_block = "2a0f:85c1:368:101::/64" # pops[ewr1].ipv6_unicast_block
 wg_address       = "fda5:bc65:9bb1:1::1/64"  # pops[ewr1].wg_address + mesh_prefix length
 cluster_enabled  = false
+bgp_announce     = false  # M7 go-live: set true, then scripts/deploy <pop>

@@ -31,6 +31,12 @@ user          = "git"
 # admits it from wg0.
 listen = "${metrics_listen}"
 
+[health]
+# Anycast announcement control (docs/health.md). Empty = checks only, never
+# announce; set by the bgp_announce variable of modules/forge-node.
+announcer     = "${announcer}"
+interval      = "10s"
+
 [cluster]
 enabled        = ${cluster_enabled}
 control_listen = "${control_listen}"

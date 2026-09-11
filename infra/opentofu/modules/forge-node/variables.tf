@@ -115,3 +115,9 @@ variable "control_port" {
   type        = number
   default     = 9200
 }
+
+variable "bgp_announce" {
+  description = "Let the health controller announce the anycast prefixes through scripts/bgp-announce once the node passes its checks. false = BGP sessions stay up but export nothing (safe default until the operator goes live, ADR 0013)."
+  type        = bool
+  default     = false
+}

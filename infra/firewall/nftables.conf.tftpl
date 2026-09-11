@@ -46,24 +46,24 @@ table inet filter {
                 echo-request, echo-reply } limit rate 200/second accept
 
     # Operator SSH (OpenSSH on ADMIN_SSH), rate-limited per source.
-    tcp dport ADMIN_SSH ct state new add @ssh_admin_v4 { ip saddr limit rate 6/minute burst 10 packets } accept
-    tcp dport ADMIN_SSH ct state new add @ssh_admin_v6 { ip6 saddr limit rate 6/minute burst 10 packets } accept
+    tcp dport $ADMIN_SSH ct state new add @ssh_admin_v4 { ip saddr limit rate 6/minute burst 10 packets } accept
+    tcp dport $ADMIN_SSH ct state new add @ssh_admin_v6 { ip6 saddr limit rate 6/minute burst 10 packets } accept
 
     # Public services: forge Git-over-SSH (22) and Gemini/Titan (1965) on
     # anycast + provider unicast addresses (anything not arriving over wg0).
     # Per-source new-connection ceiling; forge applies its own per-IP limits.
-    iifname != WG_IF tcp dport { 22, 1965 } ct state new add @svc_v4 { ip saddr limit rate 60/minute burst 120 packets } accept
-    iifname != WG_IF tcp dport { 22, 1965 } ct state new add @svc_v6 { ip6 saddr limit rate 60/minute burst 120 packets } accept
+    iifname != $WG_IF tcp dport { 22, 1965 } ct state new add @svc_v4 { ip saddr limit rate 60/minute burst 120 packets } accept
+    iifname != $WG_IF tcp dport { 22, 1965 } ct state new add @svc_v6 { ip6 saddr limit rate 60/minute burst 120 packets } accept
 
     # WireGuard mesh (peers unknown at render time; WireGuard authenticates).
-    udp dport WG_PORT accept
+    udp dport $WG_PORT accept
 
     # Mesh-only ports.
-    iifname WG_IF tcp dport PRIVATE_TCP accept
+    iifname $WG_IF tcp dport $PRIVATE_TCP accept
 
     # BGP with the provider peers (belt and braces; session is outbound).
-    ip saddr BGP_PEERS_V4 tcp dport 179 accept
-    ip6 saddr BGP_PEERS_V6 tcp dport 179 accept
+    ip saddr $BGP_PEERS_V4 tcp dport 179 accept
+    ip6 saddr $BGP_PEERS_V6 tcp dport 179 accept
 
     # Quiet log for everything else (bounded).
     limit rate 5/minute log prefix "nft-drop: " counter

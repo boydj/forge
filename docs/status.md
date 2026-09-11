@@ -4,11 +4,13 @@ Updated: 2026-09-10 (evening)
 
 ## Current milestone
 
-**M10-style hardening done for the software (security review remediated,
-failure injection, load smoke, real-client interoperability); M11 Mercurial
-prototype done; M4 single-VPS deployment and M6-M9 network milestones wait
-on operator actions (credentials, Vultr BGP approval, ROA, the /48
-decision).**
+**M4 complete: the first POP (ewr1, Vultr New Jersey) is provisioned from
+code and serves gemini://git.as215520.net/ and git@git.as215520.net over
+IPv4 and IPv6 (Phase 1: DNS points at the node's provider addresses). BGP
+sessions to Vultr are established on both families; announcement of the
+prefixes is gated on the operator (M7).** Hardening (security review, failure
+injection, load, interop), M11 Mercurial prototype and M6 desired state are
+done.
 
 ## Accomplished
 
@@ -49,7 +51,13 @@ decision).**
 
 ## Running services
 
-None deployed. Local: `make run` serves gemini://localhost:1965/ and ssh://localhost:22 (use `forge admin init --ssh-listen :2222` for unprivileged ports).
+- **ewr1** (Vultr `ewr`, `vc2-1c-1gb`, 64.176.195.46 / 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3):
+  forge (Gemini/Titan :1965, Git SSH :22), forge-secrets (tmpfs), nftables,
+  wg0 (no peers yet), BIRD with `vultr4`/`vultr6` Established and
+  `ANNOUNCE=false`. DNS: `ewr1.nodes.as215520.net`, `git.as215520.net`
+  (A/AAAA to the node, SSHFP). Deployed 2026-09-11 with
+  `tofu apply` + `scripts/deploy ewr1`.
+- Local: `make run` serves gemini://localhost:1965/ and ssh://localhost:2222.
 
 ## Tests passing
 
@@ -86,20 +94,29 @@ None deployed. Local: `make run` serves gemini://localhost:1965/ and ssh://local
 
 ## Human blockers
 
-None blocking application work. Items that will need the operator (batched, not yet urgent):
+Resolved 2026-09-11: /48 migrates to the forge POPs (ADR 0013); cost
+approved; Vultr and Cloudflare tokens in `infra/secrets/dev.enc.yaml`; Vultr
+BGP enabled for AS215520 with both prefixes registered; no ROA possible for
+the /24 (expected not-found).
 
-1. Vultr: BGP request form + LOA for 44.32.58.0/24 and 2a0f:85c1:368::/48; account instance-limit increase; API key.
-2. RPKI: ROA for 44.32.58.0/24 (via ARDC, ARIN hosted RPKI); route object exists in RADB (MAINT-ARDC).
-3. Decision: the /48 is live via AS835 (Toronto). Choose migrate-to-forge-POPs vs a separate /48 (see `docs/network-architecture.md` section 6).
-4. Reverse DNS delegation for both prefixes (Inferno `domain` object; ARDC portal).
-5. Cloudflare API token (Zone:DNS:Edit, Zone:Zone:Read) for `as215520.net`; publish DS record at Namecheap.
-6. Spending approval for the first Vultr instance (~$5-6/month).
+Remaining operator actions:
+
+1. **Go-live of BGP announcement (M7)**: say the word, then `bgp_announce = true`
+   in `dev.auto.tfvars`, `scripts/deploy ewr1`; the health controller
+   announces once checks pass; verify with `scripts/netcheck --expect announced`
+   and withdraw the AS835 (Toronto) announcement of the /48 afterwards.
+2. RIPE objects (`infra/network/irr/`): aut-num update and `AS215520:AS-ALL`
+   via Webupdates (SSO); see the reply of 2026-09-11 and `infra/network/irr/README.md`.
+3. Reverse DNS delegation for both prefixes (Inferno `domain` object; ARDC portal NS records).
+4. Publish the DS record at Namecheap; fill PeeringDB (`infra/network/peeringdb/desired.yaml`).
+5. Register the first account (it becomes administrator): open
+   gemini://git.as215520.net/account with a client certificate in Lagrange.
 
 ## Next executable work
 
-1. M4 waits on operator input (see human blockers); everything below it is code-complete.
-2. M4: `tofu plan/apply` for the dev environment once credentials and spend approval exist; then `scripts/deploy ewr1` and the runbook smoke test.
-3. M6/M7: operator actions in `docs/runbooks/network-bootstrap.md`; `scripts/netcheck --expect announced` after Vultr approval.
+1. M7: enable announcement on ewr1 on operator go-ahead (see human blockers), switch `git.as215520.net` back to the anycast addresses, withdraw AS835.
+2. M6: RIPE objects, rDNS, DS, PeeringDB (operator).
+3. Backup verification on ewr1 (`forge-backup.timer` runs nightly; check `/var/backups/forge`).
 4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).
 5. Dogfooding once M4 is live and backups verified (`docs/dogfooding.md`).
 6. Pushed to `origin` (github.com/boydj/forge) on 2026-09-10; GitHub Actions runs `.github/workflows/ci.yml` on every push.
