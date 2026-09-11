@@ -150,6 +150,10 @@ type Docs struct {
 	Path string `toml:"path"`
 	// Ref is the branch or tag to read; empty = the repository's default branch.
 	Ref string `toml:"ref"`
+	// Incidents is the subdirectory of Path holding incident reports named
+	// YYYY-MM-DD-slug.md; the status page lists the newest and serves them
+	// as a feed. "" disables the list.
+	Incidents string `toml:"incidents"`
 }
 
 // Metrics configures the Prometheus endpoint (HTTP, private network only).
@@ -250,7 +254,7 @@ func Default(dataDir string) *Config {
 			SyncInterval: Duration{10 * time.Second},
 		},
 		Health: Health{Interval: Duration{10 * time.Second}},
-		Docs:   Docs{Path: "docs"},
+		Docs:   Docs{Path: "docs", Incidents: "incidents"},
 	}
 }
 
@@ -333,8 +337,10 @@ func (c *Config) Validate() error {
 			errs = append(errs, errors.New("docs.repo must be \"owner/name\""))
 		}
 	}
-	if strings.HasPrefix(c.Docs.Path, "/") || c.Docs.Path == ".." || strings.HasPrefix(c.Docs.Path, "../") || strings.Contains(c.Docs.Path, "/../") {
-		errs = append(errs, errors.New("docs.path must be a relative path inside the repository"))
+	for key, p := range map[string]string{"docs.path": c.Docs.Path, "docs.incidents": c.Docs.Incidents} {
+		if strings.HasPrefix(p, "/") || p == ".." || strings.HasPrefix(p, "../") || strings.Contains(p, "/../") || strings.HasSuffix(p, "/..") {
+			errs = append(errs, fmt.Errorf("%s must be a relative path inside the repository", key))
+		}
 	}
 	return errors.Join(errs...)
 }

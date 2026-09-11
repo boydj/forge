@@ -132,8 +132,9 @@ func (n *Node) syncPeer(ctx context.Context, peer string, only int64) error {
 	if err != nil {
 		return err
 	}
+	cur, _ := n.opts.Store.ReplCursor(ctx, peer)
+	n.setLag(peer, st.LastEventID-cur)
 	if n.opts.Metrics != nil {
-		cur, _ := n.opts.Store.ReplCursor(ctx, peer)
 		n.opts.Metrics.ReplicaLag.WithLabelValues(peer).Set(float64(st.LastEventID - cur))
 	}
 	var errs []error

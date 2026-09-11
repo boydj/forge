@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"as215520.net/forge/internal/health"
 	"as215520.net/forge/internal/metrics"
 	"as215520.net/forge/internal/store"
 	gitvcs "as215520.net/forge/internal/vcs/git"
@@ -66,6 +67,9 @@ type Options struct {
 	// Forward handles writes forwarded from replicas (set by the web layer;
 	// nil means /v1/forward answers 501).
 	Forward Handler
+	// Health snapshots the node's health controller for /v1/status (nil:
+	// health is not reported). serve passes the controller's Status method.
+	Health func() health.Status
 }
 
 // Node is the replication service of one forge node.
@@ -82,6 +86,14 @@ type Node struct {
 
 	syncMu sync.Mutex // one sync cycle at a time
 	wake   chan int64 // repo ids to sync promptly (0: everything)
+
+	started time.Time
+	// fleet is the last known status of every peer (status.go).
+	fleetMu sync.RWMutex
+	fleet   map[string]PeerStatus
+	// lag is events behind each leader as of the last sync (status.go).
+	lagMu sync.Mutex
+	lag   map[string]int64
 
 	srv *http.Server
 }
@@ -152,6 +164,9 @@ func New(o Options) (*Node, error) {
 		client:      &http.Client{Timeout: 2 * time.Minute},
 		assetClient: &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: 30 * time.Second}},
 		wake:        make(chan int64, 64),
+		started:     time.Now(),
+		fleet:       map[string]PeerStatus{},
+		lag:         map[string]int64{},
 	}
 	return n, nil
 }
@@ -214,6 +229,7 @@ func (n *Node) Start(ctx context.Context, errc chan<- error) error {
 		}
 	}()
 	go n.Run(ctx)
+	go n.fleetLoop(ctx)
 	return nil
 }
 

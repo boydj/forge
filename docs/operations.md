@@ -20,6 +20,7 @@ complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 | `docs.repo` | (empty) | `owner/name` of a **public** repository on this forge whose `docs.path` directory is published as the documentation site at `/docs/`; empty disables it. A git push to that repository updates the site |
 | `docs.path` | `docs` | subdirectory of `docs.repo` to publish (`""` = the repository root) |
 | `docs.ref` | (empty) | branch or tag to read; empty = the repository's default branch |
+| `docs.incidents` | `incidents` | subdirectory of `docs.path` holding incident reports (`YYYY-MM-DD-slug.md`) for the status page and its feeds; `""` disables the list |
 | `data_dir` | `/var/lib/forge` | database, repositories, assets, tmp, TLS and SSH identities. Override: `FORGE_DATA_DIR` |
 | `log_level` | `info` | `debug`, `info`, `warn`, `error`. Override: `FORGE_LOG_LEVEL` |
 | `log_format` | `text` | `text` or `json` (slog to stderr, i.e. the journal) |
@@ -200,6 +201,29 @@ the corresponding feature exists.
 is what `scripts/deploy smoke` checks. `docs/network-architecture.md`
 refers to it as `/healthz`; the implemented path is `/status`, and the
 health worker that will drive `bgp-announce` from it is part of M5.
+
+## Status page: `/status/`
+
+`gemini://host/status/` (trailing slash; public) is the fleet as this node
+sees it: a banner ("All systems operational", "Degraded: n of m points of
+presence serving", "Major outage"), one line per component derived from
+the health checks of every reachable node (Gemini and Titan, Git over SSH,
+metadata database, storage, replication) plus how many nodes announce the
+anycast prefixes and how many are reachable over the control plane, one
+line per point of presence (announcement state, health verdict with the
+failing checks, replication lag in events, version, uptime, when it was
+last seen), and the ten newest incident reports from `docs.incidents` in
+the documentation repository (`docs/incidents/README.md` gives the file
+format). `/status/feed` and `/status/atom.xml` serve the incidents as a
+gemfeed and an Atom feed.
+
+The fleet view comes from the replication control plane: every node polls
+every peer's `/v1/status` every 30 s (`repl.PollFleet`), which now carries
+the health controller's verdict, the announcement state, each check's
+result, the process start time and the replication lag. A single node
+without a cluster shows itself. The page needs no monitoring host and
+degrades to "unreachable since <time>" for a peer that stops answering.
+The `/status` probe (no trailing slash) is unchanged.
 
 ## Maintenance, purge and quotas
 

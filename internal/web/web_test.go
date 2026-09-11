@@ -33,6 +33,7 @@ import (
 type harness struct {
 	t    *testing.T
 	f    *forge.Forge
+	h    *Handler
 	addr string
 }
 
@@ -59,7 +60,8 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &gemini.Server{Handler: New(f, f.Log), TLSConfig: gemini.TLSServerConfig(cert), Logger: f.Log}
+	hd := New(f, f.Log)
+	srv := &gemini.Server{Handler: hd, TLSConfig: gemini.TLSServerConfig(cert), Logger: f.Log}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +72,7 @@ func newHarness(t *testing.T) *harness {
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	})
-	return &harness{t: t, f: f, addr: l.Addr().String()}
+	return &harness{t: t, f: f, h: hd, addr: l.Addr().String()}
 }
 
 func clientCert(t *testing.T, cn string) tls.Certificate {
@@ -175,6 +177,11 @@ func (h *harness) seedRepo(user, name string) {
 	_ = os.WriteFile(filepath.Join(work, "docs", "README.md"), []byte("# Manual\n\nRead [a](a.md) and [ops](guide/ops.md).\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(work, "docs", "guide", "ops.md"), []byte("# Ops\n\nBack to [index](../README.md).\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(work, "docs", "guide", "notes.txt"), []byte("plain\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(work, "docs", "incidents"), 0o755)
+	_ = os.WriteFile(filepath.Join(work, "docs", "incidents", "README.md"), []byte("# Incidents\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(work, "docs", "incidents", "2026-09-01-leader-failover.md"), []byte("# Leader failover\n\nMoved.\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(work, "docs", "incidents", "2026-09-05-disk-full.md"), []byte("Preamble\n\n## Disk full on sgp1\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(work, "docs", "incidents", "2026-09-03-untitled.md"), []byte("no heading\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(work, "evil.txt"), []byte("=> gemini://evil/ click\n```\n# heading\n"), 0o644)
 	run("add", ".")
 	run("commit", "-qm", "first")
@@ -632,5 +639,84 @@ func TestDocs(t *testing.T) {
 	h.f.Config.Docs.Repo = "alice/secret"
 	if status, _, _ := h.get(h.url("/docs/"), nil, ""); status != 51 {
 		t.Errorf("private docs repo: %d, want 51", status)
+	}
+}
+
+type stubFleet []FleetNode
+
+func (s stubFleet) Fleet(context.Context) []FleetNode { return s }
+
+func TestStatusPage(t *testing.T) {
+	h := newHarness(t)
+	h.seedRepo("alice", "proj")
+	h.f.Config.Docs.Repo = "alice/proj"
+
+	// The probe is unchanged.
+	if status, _, body := h.get(h.url("/status"), nil, ""); status != 20 || !strings.HasPrefix(body, "ok\n") {
+		t.Fatalf("/status probe: %d %q", status, body)
+	}
+	// Single node, no cluster, no controller: operational, with incidents
+	// newest first and titles from the first heading.
+	status, _, body := h.get(h.url("/status/"), nil, "")
+	if status != 20 {
+		t.Fatalf("/status/: %d\n%s", status, body)
+	}
+	for _, w := range []string{"# forge status", "## All systems operational", "Anycast: not configured", "local: healthy", "(this node)",
+		"=> /docs/incidents/2026-09-05-disk-full.md 2026-09-05 - Disk full on sgp1",
+		"=> /docs/incidents/2026-09-03-untitled.md 2026-09-03 - untitled",
+		"=> /docs/incidents/2026-09-01-leader-failover.md 2026-09-01 - Leader failover",
+		"=> /status/feed incident feed"} {
+		if !strings.Contains(body, w) {
+			t.Errorf("missing %q in:\n%s", w, body)
+		}
+	}
+	if strings.Index(body, "2026-09-05") > strings.Index(body, "2026-09-01") || strings.Contains(body, "README") {
+		t.Errorf("incident order or README leak:\n%s", body)
+	}
+
+	// A three-node fleet: one serving, one drained and unhealthy, one gone.
+	yes, no := true, false
+	now := time.Now()
+	h.h.Fleet = stubFleet{
+		{Node: "ewr1", Version: "0.9.0", Self: true, Reachable: true, SeenAt: now, Healthy: &yes, State: "announced", StartedAt: now.Add(-50 * time.Hour), ReplicaLag: 0,
+			Checks: []FleetCheck{{"gemini", true, ""}, {"ssh", true, ""}, {"db", true, ""}, {"disk", true, ""}}},
+		{Node: "ams1", Version: "0.9.0", Reachable: true, SeenAt: now.Add(-12 * time.Second), Healthy: &no, Detail: "ssh", State: "drained", StartedAt: now.Add(-90 * time.Second), ReplicaLag: 3,
+			Checks: []FleetCheck{{"gemini", true, ""}, {"ssh", false, "connection refused"}, {"db", true, ""}, {"disk", true, ""}, {"replica", true, ""}}},
+		{Node: "sgp1", Reachable: false, SeenAt: now.Add(-5 * time.Minute), Err: "dial tcp: i/o timeout", ReplicaLag: -1},
+	}
+	status, _, body = h.get(h.url("/status/"), nil, "")
+	if status != 20 {
+		t.Fatalf("/status/ fleet: %d\n%s", status, body)
+	}
+	for _, w := range []string{"## Degraded: 1 of 3 points of presence serving", "Gemini and Titan: operational", "Git over SSH: degraded (1 of 2)", "Replication: operational", "Anycast: 1 of 2 announcing", "Control plane: 2 of 3 nodes reachable",
+		"ams1: drained, unhealthy (ssh), lag 3, v0.9.0, up 1m30s, seen 12s ago", "ewr1: announced, healthy, lag 0, v0.9.0, up 2d2h (this node)", "sgp1: unreachable since ", " - dial tcp: i/o timeout"} {
+		if !strings.Contains(body, w) {
+			t.Errorf("missing %q in:\n%s", w, body)
+		}
+	}
+	// Everything withdrawn: outage.
+	h.h.Fleet = stubFleet{{Node: "ewr1", Self: true, Reachable: true, Healthy: &yes, State: "withdrawn"}, {Node: "ams1", Reachable: true, SeenAt: now, Healthy: &yes, State: "withdrawn", Manual: true}}
+	_, _, body = h.get(h.url("/status/"), nil, "")
+	for _, w := range []string{"## Major outage: no point of presence is serving", "Anycast: no point of presence announcing (2 configured)", "ams1: withdrawn by operator, healthy"} {
+		if !strings.Contains(body, w) {
+			t.Errorf("missing %q in:\n%s", w, body)
+		}
+	}
+	// Feeds.
+	status, _, body = h.get(h.url("/status/feed"), nil, "")
+	if status != 20 || !strings.Contains(body, "# forge incidents") || !strings.Contains(body, "=> /docs/incidents/2026-09-05-disk-full.md 2026-09-05 - Disk full on sgp1") {
+		t.Errorf("/status/feed: %d\n%s", status, body)
+	}
+	status, meta, body := h.get(h.url("/status/atom.xml"), nil, "")
+	if status != 20 || !strings.HasPrefix(meta, "application/atom+xml") || !strings.Contains(body, "<title>Disk full on sgp1</title>") || !strings.Contains(body, "<updated>2026-09-05T00:00:00Z</updated>") {
+		t.Errorf("/status/atom.xml: %d %s\n%s", status, meta, body)
+	}
+	if status, _, _ := h.get(h.url("/status/nope"), nil, ""); status != 51 {
+		t.Errorf("/status/nope: %d", status)
+	}
+	// No docs repository: no incidents, page still renders.
+	h.f.Config.Docs.Repo = ""
+	if status, _, body := h.get(h.url("/status/"), nil, ""); status != 20 || !strings.Contains(body, "No incidents recorded.") {
+		t.Errorf("/status/ without docs: %d\n%s", status, body)
 	}
 }

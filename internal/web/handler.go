@@ -37,9 +37,12 @@ type Handler struct {
 	// Forwarder relays Titan writes for repositories led elsewhere; nil in
 	// single-node mode.
 	Forwarder Forwarder
+	// Fleet lists the cluster for the status page; nil shows this node only.
+	Fleet FleetSource
 
 	limiter rateLimiter
 	secret  []byte
+	titleCache
 }
 
 // Forwarder is implemented by the replication node.
@@ -293,8 +296,8 @@ func (h *Handler) route(req *request) {
 		h.feedAll(req, false)
 	case segs[0] == "atom.xml" && len(segs) == 1:
 		h.feedAll(req, true)
-	case segs[0] == "status" && len(segs) == 1:
-		h.status(req)
+	case segs[0] == "status":
+		h.statusRoutes(req, segs[1:], strings.HasSuffix(path, "/"))
 	case segs[0] == "docs":
 		h.docs(req, segs[1:], strings.HasSuffix(path, "/"))
 	case segs[0] == "new" && len(segs) == 1:

@@ -23,6 +23,31 @@ type StatusResponse struct {
 	LeaderRepos    int    `json:"leader_repos"`
 	LastEventID    int64  `json:"last_event_id"`
 	Time           string `json:"time"`
+	// Health is the node's health and announcement state, present when it
+	// runs a health controller (Options.Health). The fleet status page
+	// (/status/) is built from these.
+	Health *HealthStatus `json:"health,omitempty"`
+	// StartedAt is when the process started (RFC 3339 UTC).
+	StartedAt string `json:"started_at,omitempty"`
+	// ReplicaLag is the largest number of events this node was behind any
+	// leader it follows at its last sync; -1 before the first sync.
+	ReplicaLag int64 `json:"replica_lag"`
+}
+
+// HealthStatus is the wire form of health.Status.
+type HealthStatus struct {
+	Healthy bool          `json:"healthy"`
+	Detail  string        `json:"detail,omitempty"`
+	State   string        `json:"state"` // announced, drained, withdrawn
+	Manual  bool          `json:"manual,omitempty"`
+	Checks  []CheckStatus `json:"checks,omitempty"`
+}
+
+// CheckStatus is one health check's last result.
+type CheckStatus struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // wireEvent is one event on the wire.
@@ -145,7 +170,12 @@ func (n *Node) status(ctx context.Context) (StatusResponse, error) {
 	if n.opts.Metrics != nil {
 		n.opts.Metrics.LeaderRepos.Set(float64(led))
 	}
-	return StatusResponse{Node: n.opts.Name, Version: n.opts.Version, MetadataLeader: n.meta, LeaderRepos: led, LastEventID: last, Time: store.Now()}, nil
+	st := StatusResponse{Node: n.opts.Name, Version: n.opts.Version, MetadataLeader: n.meta, LeaderRepos: led, LastEventID: last, Time: store.Now(),
+		StartedAt: n.started.UTC().Format(time.RFC3339), ReplicaLag: n.maxLag()}
+	if n.opts.Health != nil {
+		st.Health = healthStatus(n.opts.Health())
+	}
+	return st, nil
 }
 
 func (n *Node) handleStatus(w http.ResponseWriter, r *http.Request, _ string) {

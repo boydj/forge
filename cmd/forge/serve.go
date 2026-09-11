@@ -95,13 +95,14 @@ func runServe(args []string) error {
 			Name: cfg.Node, Listen: cfg.Cluster.ControlListen, Peers: cfg.Cluster.Peers,
 			SecretFile: cfg.Cluster.SecretFile, MetadataLeader: cfg.Cluster.MetadataLeader,
 			SyncInterval: cfg.Cluster.SyncInterval.Duration, ReposDir: cfg.ReposDir(), AssetsDir: cfg.AssetsDir(), Version: version.Version,
-			Store: app.Store, Git: app.Git, Log: log.With("proto", "repl"), Metrics: reg, Forward: handler,
+			Store: app.Store, Git: app.Git, Log: log.With("proto", "repl"), Metrics: reg, Forward: handler, Health: hw.Status,
 		})
 		if err != nil {
 			return fmt.Errorf("replication: %w", err)
 		}
 		app.OnPush = rn.OnPush
 		handler.Forwarder = rn
+		handler.Fleet = fleetSource{rn: rn}
 		if err := rn.Start(ctx, errc); err != nil {
 			return fmt.Errorf("replication start: %w", err)
 		}

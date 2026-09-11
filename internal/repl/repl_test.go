@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"as215520.net/forge/internal/health"
 	"as215520.net/forge/internal/metrics"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/vcs"
@@ -811,5 +812,50 @@ func TestAssetsDirDefault(t *testing.T) {
 	}
 	if !validAsset("v1.0-rc1+build", "a_b.tar.gz") || validAsset("..", "a") || validAsset("v1", "..") || validAsset("v1", "../a") || validAsset("v1/x", "a") || validAsset("v1", ".hidden") || validAsset("", "a") {
 		t.Error("validAsset")
+	}
+}
+
+func TestFleetStatus(t *testing.T) {
+	a, b := newCluster(t)
+	ctx := context.Background()
+	a.node.opts.Health = func() health.Status {
+		return health.Status{State: health.StateAnnounced, Healthy: true, Results: []health.Result{{Name: "gemini"}, {Name: "ssh"}}}
+	}
+	// Before any poll: known peer, never seen.
+	if fs := b.node.Fleet(); len(fs) != 1 || fs["a"].Reachable() || !fs["a"].SeenAt.IsZero() {
+		t.Fatalf("initial fleet: %+v", fs)
+	}
+	b.node.PollFleet(ctx)
+	fs := b.node.Fleet()
+	pa := fs["a"]
+	if !pa.Reachable() || pa.Err != "" || pa.Status.Node != "a" || pa.Status.Health == nil {
+		t.Fatalf("after poll: %+v", pa)
+	}
+	if pa.Status.Health.State != "announced" || !pa.Status.Health.Healthy || len(pa.Status.Health.Checks) != 2 || !pa.Status.Health.Checks[1].OK {
+		t.Errorf("health on the wire: %+v", pa.Status.Health)
+	}
+	if pa.Status.StartedAt == "" || pa.Status.ReplicaLag != -1 {
+		t.Errorf("started/lag: %+v", pa.Status)
+	}
+	// Self status carries the same fields; a node without a controller
+	// omits health.
+	if st, err := a.node.SelfStatus(ctx); err != nil || st.Health == nil || st.Health.State != "announced" {
+		t.Errorf("self status: %+v %v", st, err)
+	}
+	if st, err := b.node.SelfStatus(ctx); err != nil || st.Health != nil {
+		t.Errorf("self status without controller: %+v %v", st, err)
+	}
+	// Lag is recorded by a sync and reported afterwards.
+	if err := b.node.syncPeer(ctx, "a", 0); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := b.node.SelfStatus(ctx); st.ReplicaLag < 0 {
+		t.Errorf("lag after sync: %d", st.ReplicaLag)
+	}
+	// An unreachable peer keeps its last good status and reports the error.
+	a.node.opts.Peers["b"] = "127.0.0.1:1"
+	a.node.PollFleet(ctx)
+	if pb := a.node.Fleet()["b"]; pb.Reachable() || pb.Err == "" {
+		t.Errorf("unreachable peer: %+v", pb)
 	}
 }
