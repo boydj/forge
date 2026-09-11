@@ -15,20 +15,60 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
+// builtBinary is the forge binary built once per test process from the
+// current sources (see binary).
+var (
+	buildOnce   sync.Once
+	builtBinary string
+	buildErr    error
+)
+
+// binary returns a forge binary built from the sources under test. The
+// integration tests used to run ../bin/forge, which is only as fresh as the
+// last `make build`; a stale binary silently tests old code (it cost an
+// afternoon once). Building here takes a few seconds and cannot be stale.
+// Without a Go toolchain in PATH the prebuilt ../bin/forge is used.
 func binary(t *testing.T) string {
 	t.Helper()
-	p, err := filepath.Abs("../bin/forge")
-	if err != nil {
-		t.Fatal(err)
+	buildOnce.Do(func() {
+		goBin, err := exec.LookPath("go")
+		if err != nil {
+			builtBinary, buildErr = filepath.Abs("../bin/forge")
+			if buildErr == nil {
+				if _, err := os.Stat(builtBinary); err != nil {
+					buildErr = fmt.Errorf("no go toolchain in PATH and no ../bin/forge: %w", err)
+				}
+			}
+			return
+		}
+		root, err := filepath.Abs("..")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		dir, err := os.MkdirTemp("", "forge-bin-")
+		if err != nil {
+			buildErr = err
+			return
+		}
+		out := filepath.Join(dir, "forge")
+		cmd := exec.Command(goBin, "build", "-o", out, "./cmd/forge")
+		cmd.Dir = root
+		if b, err := cmd.CombinedOutput(); err != nil {
+			buildErr = fmt.Errorf("build ./cmd/forge: %v\n%s", err, b)
+			return
+		}
+		builtBinary = out
+	})
+	if buildErr != nil {
+		t.Fatal(buildErr)
 	}
-	if _, err := os.Stat(p); err != nil {
-		t.Skip("build ./bin/forge first (make build)")
-	}
-	return p
+	return builtBinary
 }
 
 func freePort(t *testing.T) int {
