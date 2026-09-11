@@ -167,6 +167,17 @@ pops:
     dns: true
     provider_ipv4: null
     provider_ipv6: null
+  - name: sgp1
+    provider: vultr
+    region: sgp                      # Vultr Singapore
+    index: 3
+    ipv6_unicast_block: "2a0f:85c1:368:103::/64"
+    wg_address: "fda5:bc65:9bb1:1::3"
+    wg_listen_port: 51820
+    roles: [forge, bgp, replica]
+    dns: true
+    provider_ipv4: null
+    provider_ipv6: null
   - name: lab
     provider: local                  # netns / VM simulation; never public
     region: local

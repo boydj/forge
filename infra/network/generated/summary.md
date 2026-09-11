@@ -17,6 +17,7 @@ Zone `as215520.net`, AS215520. Announced from every POP: `44.32.58.0/24` and `2a
 | ams1 | vultr | ams | 2 | `2a0f:85c1:368:102::/64` | `2a0f:85c1:368:102::1` | `fda5:bc65:9bb1:1::2` | 78.141.214.215 | 2a05:f480:1400:3d99:5400:06ff:feac:9af4 | forge, bgp, replica |
 | ewr1 | vultr | ewr | 1 | `2a0f:85c1:368:101::/64` | `2a0f:85c1:368:101::1` | `fda5:bc65:9bb1:1::1` | 64.176.195.46 | 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3 | forge, bgp, replica |
 | lab | local | local | 254 | `2a0f:85c1:368:1fe::/64` | `2a0f:85c1:368:1fe::1` | `fda5:bc65:9bb1:1::fe` | _unassigned_ | _unassigned_ | forge, bgp, lab |
+| sgp1 | vultr | sgp | 3 | `2a0f:85c1:368:103::/64` | `2a0f:85c1:368:103::1` | `fda5:bc65:9bb1:1::3` | 66.42.49.14 | 2001:19f0:4401:0825:5400:06ff:feac:a4c3 | forge, bgp, replica |
 
 ## IPv6 layout
 

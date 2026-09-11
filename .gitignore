@@ -32,3 +32,4 @@ crash.log
 .mise.local.toml
 node_modules/
 .known_hosts
+__pycache__/

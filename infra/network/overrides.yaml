@@ -7,7 +7,11 @@ pops:
   ams1:
     provider_ipv4: 78.141.214.215
     provider_ipv6: 2a05:f480:1400:3d99:5400:06ff:feac:9af4
+  sgp1:
+    provider_ipv4: 66.42.49.14
+    provider_ipv6: 2001:19f0:4401:0825:5400:06ff:feac:a4c3
 wireguard:
   public_keys:
     ewr1: qoH6gKdZWIsqPHF33Dvv47BG2I9W56SPefw5qa8Nc2k=
     ams1: NpxqmLlbiXpFWcu2eCzihWSGEGqoos0xxSrDdKfw0mo=
+    sgp1: FzslPJytexUMSo1cs9fwmKHlzTp6O46pX4wo4JLr+WY=

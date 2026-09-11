@@ -9,13 +9,13 @@ define anycast_v6 = { 2a0f:85c1:368:1::1 }
 define service_ports = { 22, 1965 }
 
 # Per-POP unicast (from the /48) and the WireGuard mesh
-define node_unicast_v6 = { 2a0f:85c1:368:102::1, 2a0f:85c1:368:101::1 }
-define node_unicast_blocks_v6 = { 2a0f:85c1:368:102::/64, 2a0f:85c1:368:101::/64 }
+define node_unicast_v6 = { 2a0f:85c1:368:102::1, 2a0f:85c1:368:101::1, 2a0f:85c1:368:103::1 }
+define node_unicast_blocks_v6 = { 2a0f:85c1:368:102::/64, 2a0f:85c1:368:101::/64, 2a0f:85c1:368:103::/64 }
 define wg_mesh_v6 = fda5:bc65:9bb1:1::/64
-define wg_nodes_v6 = { fda5:bc65:9bb1:1::2, fda5:bc65:9bb1:1::1 }
+define wg_nodes_v6 = { fda5:bc65:9bb1:1::2, fda5:bc65:9bb1:1::1, fda5:bc65:9bb1:1::3 }
 define wg_port = 51820
-define wg_endpoints_v4 = { 78.141.214.215, 64.176.195.46 }
-define wg_endpoints_v6 = { 2a05:f480:1400:3d99:5400:06ff:feac:9af4, 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3 }
+define wg_endpoints_v4 = { 78.141.214.215, 64.176.195.46, 66.42.49.14 }
+define wg_endpoints_v6 = { 2a05:f480:1400:3d99:5400:06ff:feac:9af4, 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3, 2001:19f0:4401:0825:5400:06ff:feac:a4c3 }
 
 # BGP peers (TCP/179, multihop): allow in both directions
 define bgp_peers_v4 = { 169.254.169.254 }

@@ -313,7 +313,11 @@ class NetgenTest(unittest.TestCase):
         self.assertIn("define bgp_peers_v4 = { 169.254.169.254 }", nft)
         self.assertIn("define bgp_peers_v6 = { 2001:19f0:ffff::1 }", nft)
         self.assertIn("define wg_port = 51820", nft)
-        self.assertRegex(nft, r"define wg_nodes_v6 = \{ fda5:bc65:9bb1:1::[12], fda5:bc65:9bb1:1::[12] \}")
+        # Production wg node addresses ::1 (ewr1), ::2 (ams1), ::3 (sgp1); lab (::fe) excluded.
+        m = re.search(r"define wg_nodes_v6 = \{ ([^}]+) \}", nft)
+        self.assertIsNotNone(m)
+        self.assertEqual(sorted(x.strip() for x in m.group(1).split(",")),
+                         ["fda5:bc65:9bb1:1::1", "fda5:bc65:9bb1:1::2", "fda5:bc65:9bb1:1::3"])
         self.assertNotIn("1fe::", nft)  # lab never appears in the production firewall sets
 
 

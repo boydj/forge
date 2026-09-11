@@ -12,6 +12,9 @@ nodes:
   ewr1:
     ipv4: 64.176.195.46
     ipv6: 2a0f:85c1:368:101::1
+  sgp1:
+    ipv4: 66.42.49.14
+    ipv6: 2a0f:85c1:368:103::1
 nodes_provider:
   ams1:
     ipv4: 78.141.214.215
@@ -19,6 +22,9 @@ nodes_provider:
   ewr1:
     ipv4: 64.176.195.46
     ipv6: 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3
+  sgp1:
+    ipv4: 66.42.49.14
+    ipv6: 2001:19f0:4401:0825:5400:06ff:feac:a4c3
 nodes_subdomain: nodes
 service_hostname: git
 zone_name: as215520.net

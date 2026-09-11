@@ -16,6 +16,9 @@ pops:
   ams1:
     provider_ipv4: 203.0.113.20
     provider_ipv6: "2001:db8:2::20"
+  sgp1:
+    provider_ipv4: 203.0.113.30
+    provider_ipv6: "2001:db8:3::30"
   lab:
     provider_ipv4: 192.0.2.254
     provider_ipv6: "2001:db8:ffff::fe"
@@ -23,3 +26,4 @@ wireguard:
   public_keys:
     ewr1: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     ams1: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
+    sgp1: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
