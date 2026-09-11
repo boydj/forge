@@ -164,6 +164,10 @@ write_files:
     permissions: "0755"
     content: |
       ${indent(6, forge_bgp_exec)}
+  - path: /usr/local/bin/bgp-announce
+    permissions: "0755"
+    content: |
+      ${indent(6, bgp_announce_script)}
 
   # --- Secrets in tmpfs (SR-02) and the deploy user's only root command
   # (SR-19a). Both are inline copies of infra/systemd/forge-secrets.service

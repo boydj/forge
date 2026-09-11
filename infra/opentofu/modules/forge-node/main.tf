@@ -67,5 +67,6 @@ locals {
     forge_bgp_path            = file("${local.repo_root}/infra/systemd/forge-bgp.path")
     forge_bgp_request         = file("${local.repo_root}/infra/systemd/forge-bgp-request")
     forge_bgp_exec            = file("${local.repo_root}/infra/systemd/forge-bgp-exec")
+    bgp_announce_script       = file("${local.repo_root}/scripts/bgp-announce")
   })
 }

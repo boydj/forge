@@ -42,7 +42,7 @@ HELPER = os.path.join(SYSTEMD, "forge-deploy-helper")
 SECRETS_UNIT = os.path.join(SYSTEMD, "forge-secrets.service")
 DEPLOY = os.path.join(ROOT, "scripts", "deploy")
 # 250 lines of template plus the two inline files (helper ~165, unit ~40).
-MAX_LINES = 480
+MAX_LINES = 520
 SUDO_RULE = "ALL=(root) NOPASSWD: /usr/local/sbin/forge-deploy-helper *"
 
 PLACEHOLDER_RE = re.compile(r"\$\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}")
@@ -63,8 +63,6 @@ def render(template, scalars, blocks):
         lines = text.split("\n")
         return lines[0] + "".join("\n" + (" " * n + l if l else "") for l in lines[1:])
 
-    out = INDENT_RE.sub(indent_sub, template)
-
     def scalar_sub(m):
         name = m.group(1)
         if name in scalars:
@@ -73,7 +71,12 @@ def render(template, scalars, blocks):
             return blocks[name]
         raise KeyError(f"no dummy value for placeholder ${{{name}}}")
 
-    return PLACEHOLDER_RE.sub(scalar_sub, out)
+    # Substitute the template's own scalar vars first, then insert block
+    # content verbatim. templatefile does not re-evaluate inserted values,
+    # so shell expansions (e.g. ${STATE_FILE}) inside embedded scripts must
+    # not be treated as template placeholders.
+    out = PLACEHOLDER_RE.sub(scalar_sub, template)
+    return INDENT_RE.sub(indent_sub, out)
 
 
 def render_toml():
@@ -127,6 +130,7 @@ class CloudInitTemplate(unittest.TestCase):
             "forge_bgp_path": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp.path")),
             "forge_bgp_request": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp-request")),
             "forge_bgp_exec": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp-exec")),
+            "bgp_announce_script": read(os.path.join(ROOT, "scripts", "bgp-announce")),
             "anycast_network_addresses": "Address=192.0.2.1/32\nAddress=2001:db8::1/128",
             "operator_ssh_authorized_keys": "      - ssh-ed25519 AAAAexample operator\n      - ssh-ed25519 AAAAexample2 ci",
         }
@@ -188,6 +192,7 @@ class CloudInitTemplate(unittest.TestCase):
             "/etc/systemd/system/forge-bgp.path": "forge_bgp_path",
             "/usr/local/bin/forge-bgp-request": "forge_bgp_request",
             "/usr/local/sbin/forge-bgp-exec": "forge_bgp_exec",
+            "/usr/local/bin/bgp-announce": "bgp_announce_script",
         }
         for path, name in expect.items():
             self.assertIn(path, files)
