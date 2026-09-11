@@ -102,6 +102,18 @@ variable "pops" {
   default = {}
 }
 
+variable "monitors" {
+  description = "Monitoring hosts of this environment, keyed by name (address-plan.yaml roles [monitor]; normally just mon1). Each gets a modules/vultr-monitor instance (when create_node), DNS under nodes.<zone> on its provider addresses, and a rendered prometheus.yml for every created POP (monitor.tf)."
+  type = map(object({
+    region               = string
+    plan                 = optional(string, "vc2-1c-1gb")
+    index                = number
+    wg_address           = string # address/prefix, e.g. "fda5:bc65:9bb1:1::fa/64"
+    alertmanager_targets = optional(list(string), [])
+  }))
+  default = {}
+}
+
 variable "metadata_leader" {
   description = "Node that owns users, certificates and SSH keys (cluster.metadata_leader)."
   type        = string

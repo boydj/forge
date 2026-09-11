@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning on the monitor host (installed by
+# `scripts/deploy monitor` as /etc/grafana/provisioning/dashboards/forge.yml).
+# The dashboard JSON (infra/monitoring/grafana/forge-overview.json) is pushed
+# to /var/lib/grafana/dashboards; edits made in the UI are allowed but are
+# overwritten by the next deploy, so change the JSON in the repository.
+apiVersion: 1
+providers:
+  - name: forge
+    folder: forge
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    updateIntervalSeconds: 60
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

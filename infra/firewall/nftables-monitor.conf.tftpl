@@ -1,0 +1,67 @@
+#!/usr/sbin/nft -f
+# forge monitor host firewall (mon1). Rendered by modules/monitor-node from
+# infra/firewall/nftables-monitor.conf.tftpl; installed at /etc/nftables.conf
+# by cloud-init and refreshed by `scripts/deploy monitor`. Input policy drop.
+#
+# The monitor is a WireGuard mesh member with no anycast address, no BGP and
+# no public service. From the internet only operator SSH and the WireGuard
+# port are reachable. Prometheus (9090), Grafana (3000) and blackbox_exporter
+# (9115) answer on loopback (reach them with `ssh -L`, docs/monitoring.md);
+# MESH_TCP is additionally admitted from wg0 so a mesh peer could query
+# Prometheus. Grafana itself binds 127.0.0.1 (GF_SERVER_HTTP_ADDR), so the
+# wg0 rule for 3000 is dormant until that is changed on purpose.
+flush ruleset
+
+define ADMIN_SSH = ${admin_ssh_port}
+define WG_PORT   = ${wg_port}
+define WG_IF     = "${wg_iface}"
+# Reachable from the mesh only: Prometheus and Grafana.
+define MESH_TCP  = { ${mesh_tcp_ports} }
+
+table inet filter {
+  # Per-source new-connection limits (dynamic sets, entries expire).
+  set ssh_admin_v4 { type ipv4_addr; flags dynamic; timeout 10m; }
+  set ssh_admin_v6 { type ipv6_addr; flags dynamic; timeout 10m; }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+
+    iif "lo" accept
+    ct state established,related accept
+    ct state invalid drop
+
+    # ICMP: ND/RA/MLD must never be rate-limited or v6 breaks; the rest is bounded.
+    icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit,
+                  nd-router-advert, nd-redirect, mld-listener-query,
+                  mld-listener-report, mld-listener-done, mld2-listener-report } accept
+    icmpv6 type { destination-unreachable, packet-too-big, time-exceeded,
+                  parameter-problem, echo-request, echo-reply } limit rate 200/second accept
+    icmp type { destination-unreachable, time-exceeded, parameter-problem,
+                echo-request, echo-reply } limit rate 200/second accept
+
+    # Operator SSH (OpenSSH on ADMIN_SSH), rate-limited per source.
+    tcp dport $ADMIN_SSH ct state new add @ssh_admin_v4 { ip saddr limit rate 6/minute burst 10 packets } accept
+    tcp dport $ADMIN_SSH ct state new add @ssh_admin_v6 { ip6 saddr limit rate 6/minute burst 10 packets } accept
+
+    # WireGuard mesh (peers unknown at render time; WireGuard authenticates).
+    udp dport $WG_PORT accept
+
+    # Mesh-only ports.
+    iifname $WG_IF tcp dport $MESH_TCP accept
+
+    # Quiet log for everything else (bounded).
+    limit rate 5/minute log prefix "nft-drop: " counter
+    counter drop
+  }
+
+  chain forward {
+    # A monitor never forwards (no unicast-inside-anycast backhaul here).
+    type filter hook forward priority filter; policy drop;
+  }
+
+  chain output {
+    # Egress is open: apt, the Grafana repository, scrapes over wg0 and the
+    # blackbox probes that go out the public interface on purpose.
+    type filter hook output priority filter; policy accept;
+  }
+}

@@ -19,6 +19,9 @@ pops:
   sgp1:
     provider_ipv4: 203.0.113.30
     provider_ipv6: "2001:db8:3::30"
+  mon1:                              # monitor: provider addresses are its only public ones
+    provider_ipv4: 203.0.113.250
+    provider_ipv6: "2001:db8:fa::fa"
   lab:
     provider_ipv4: 192.0.2.254
     provider_ipv6: "2001:db8:ffff::fe"
@@ -27,3 +30,4 @@ wireguard:
     ewr1: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
     ams1: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="
     sgp1: "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC="
+    mon1: "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM="

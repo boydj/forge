@@ -35,6 +35,7 @@ packages:
   - zstd
   - unattended-upgrades
   - prometheus-node-exporter    # listens on :9101 (forge metrics own :9100), wg0-only via nftables
+  - prometheus-bird-exporter    # BGP session state on :9324, wg0-only; unit below shadows the packaged one
   - sqlite3
 
 # OpenSSH: no passwords anywhere. root keeps the provider-injected bootstrap
@@ -425,6 +426,12 @@ write_files:
     defer: true
     content: |
       ARGS="--web.listen-address=:9101 --collector.disable-defaults --collector.cpu --collector.meminfo --collector.filesystem --collector.netdev --collector.loadavg --collector.diskstats --collector.systemd"
+  # bird_exporter for Prometheus (infra/monitoring/bird-exporter.service);
+  # same unit name as the package's, so this copy takes precedence.
+  - path: /etc/systemd/system/prometheus-bird-exporter.service
+    permissions: "0644"
+    content: |
+      ${indent(6, bird_exporter_service)}
 
   - path: /etc/apt/apt.conf.d/20auto-upgrades
     permissions: "0644"
@@ -469,9 +476,11 @@ runcmd:
   - [systemctl, enable, forge.service, forge-maintenance.timer, forge-backup.timer, wg-quick@wg0.service]
   - [systemctl, enable, --now, bird, prometheus-node-exporter, unattended-upgrades, forge-bgp.path]
   # apt started node-exporter before write_files placed its ARGS (:9101);
-  # restart so it releases :9100 for forge metrics.
+  # restart so it releases :9100 for forge metrics. bird-exporter is
+  # (re)started under our unit (Requires=bird.service).
   - [systemctl, daemon-reload]
   - [systemctl, restart, prometheus-node-exporter]
+  - [systemctl, enable, --now, prometheus-bird-exporter]
   - [systemctl, start, forge-maintenance.timer, forge-backup.timer]
   # Console lines for the operator: age recipient, and the sshd host key for
   # `scripts/deploy init-node --known-hosts-line` / `--hostkey-fingerprint`

@@ -19,12 +19,13 @@ locals {
   cluster_enabled = var.cluster_enabled && local.wg_ip != null
 
   nftables_vars = {
-    anycast_v4        = length(var.anycast_v4) > 0 ? join(", ", var.anycast_v4) : "192.0.2.0/32"
-    anycast_v6        = length(var.anycast_v6) > 0 ? join(", ", var.anycast_v6) : "100::/128"
-    admin_ssh_port    = var.admin_ssh_port
-    wg_port           = var.wg_port
-    wg_iface          = "wg0"
-    private_tcp_ports = "9100, 9101, ${var.control_port}"
+    anycast_v4     = length(var.anycast_v4) > 0 ? join(", ", var.anycast_v4) : "192.0.2.0/32"
+    anycast_v6     = length(var.anycast_v6) > 0 ? join(", ", var.anycast_v6) : "100::/128"
+    admin_ssh_port = var.admin_ssh_port
+    wg_port        = var.wg_port
+    wg_iface       = "wg0"
+    # forge metrics, node-exporter, bird-exporter, cluster control RPC.
+    private_tcp_ports = "9100, 9101, 9324, ${var.control_port}"
   }
   nftables_conf = templatefile("${local.repo_root}/infra/firewall/nftables.conf.tftpl", local.nftables_vars)
 
@@ -69,5 +70,6 @@ locals {
     forge_bgp_request         = file("${local.repo_root}/infra/systemd/forge-bgp-request")
     forge_bgp_exec            = file("${local.repo_root}/infra/systemd/forge-bgp-exec")
     bgp_announce_script       = file("${local.repo_root}/scripts/bgp-announce")
+    bird_exporter_service     = file("${local.repo_root}/infra/monitoring/bird-exporter.service")
   })
 }

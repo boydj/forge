@@ -109,7 +109,7 @@ def render_nftables():
             "admin_ssh_port": 2200,
             "wg_port": 51820,
             "wg_iface": "wg0",
-            "private_tcp_ports": "9100, 9101, 9200",
+            "private_tcp_ports": "9100, 9101, 9324, 9200",
         },
         {},
     )
@@ -132,6 +132,7 @@ class CloudInitTemplate(unittest.TestCase):
             "forge_bgp_request": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp-request")),
             "forge_bgp_exec": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp-exec")),
             "bgp_announce_script": read(os.path.join(ROOT, "scripts", "bgp-announce")),
+            "bird_exporter_service": read(os.path.join(ROOT, "infra", "monitoring", "bird-exporter.service")),
             "anycast_network_addresses": "Address=192.0.2.1/32\nAddress=2001:db8::1/128",
             "operator_ssh_authorized_keys": "      - ssh-ed25519 AAAAexample operator\n      - ssh-ed25519 AAAAexample2 ci",
         }
@@ -171,7 +172,8 @@ class CloudInitTemplate(unittest.TestCase):
         self.assertEqual(len(deploy["ssh_authorized_keys"]), 2)
         self.assertEqual(deploy["sudo"], [SUDO_RULE], "deploy may sudo only the helper (SR-19a)")
         self.assertNotIn("NOPASSWD:ALL", self.rendered)
-        for pkg in ("git", "bird2", "wireguard-tools", "nftables", "age", "unattended-upgrades", "prometheus-node-exporter"):
+        for pkg in ("git", "bird2", "wireguard-tools", "nftables", "age", "unattended-upgrades",
+                    "prometheus-node-exporter", "prometheus-bird-exporter"):
             self.assertIn(pkg, doc["packages"])
         for item in doc["runcmd"]:
             self.assertIsInstance(item, list, f"runcmd entries must be argv lists: {item!r}")
@@ -194,6 +196,7 @@ class CloudInitTemplate(unittest.TestCase):
             "/usr/local/bin/forge-bgp-request": "forge_bgp_request",
             "/usr/local/sbin/forge-bgp-exec": "forge_bgp_exec",
             "/usr/local/bin/bgp-announce": "bgp_announce_script",
+            "/etc/systemd/system/prometheus-bird-exporter.service": "bird_exporter_service",
         }
         for path, name in expect.items():
             self.assertIn(path, files)
@@ -218,6 +221,7 @@ class CloudInitTemplate(unittest.TestCase):
         self.assertIn("/usr/local/sbin/forge-deploy-helper init-node", joined)
         self.assertNotIn("/etc/forge/secrets", joined, "no plaintext secrets directory on the root filesystem (SR-02)")
         self.assertIn("ssh_host_ed25519_key.pub", joined, "host key must be printed to the console for pinning (SR-19b)")
+        self.assertIn("systemctl enable --now prometheus-bird-exporter", joined, "bird_exporter must be started under our unit")
 
     def test_no_downloads_in_runcmd(self):
         doc = yaml.safe_load(self.rendered) if yaml else None

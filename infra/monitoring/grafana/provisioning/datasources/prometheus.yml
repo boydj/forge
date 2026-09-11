@@ -1,0 +1,15 @@
+# Grafana datasource provisioning on the monitor host (installed by
+# `scripts/deploy monitor` as /etc/grafana/provisioning/datasources/prometheus.yml).
+# Prometheus runs on the same machine; the dashboard's ${datasource}
+# variable resolves to this uid. The dev compose stack has its own copy
+# (infra/monitoring/dev/grafana/provisioning) pointing at host.docker.internal.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://127.0.0.1:9090
+    isDefault: true
+    editable: false
+    jsonData: { timeInterval: "30s" }

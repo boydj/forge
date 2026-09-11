@@ -88,6 +88,10 @@ class NetgenTest(unittest.TestCase):
         with open(OVERRIDES, encoding="utf-8") as fh:
             cls.overrides = yaml.safe_load(fh)
         cls.pops = {p["name"]: p for p in cls.plan["pops"]}
+        # Service POPs run BIRD and carry a /48 unicast block; a monitor
+        # (roles: [monitor]) is a mesh member only.
+        cls.monitors = {n for n, p in cls.pops.items() if "monitor" in p["roles"]}
+        cls.bgp_pops = {n for n, p in cls.pops.items() if "bgp" in p["roles"] and n not in cls.monitors}
         cls.files = tree(cls.out1)
 
     @classmethod
@@ -166,15 +170,18 @@ class NetgenTest(unittest.TestCase):
         self.assertEqual(tree(self.out1), tree(self.out2))
 
     def test_expected_files_exist(self) -> None:
+        self.assertTrue(self.bgp_pops, "the plan should have at least one BGP POP")
+        self.assertTrue(self.monitors, "the plan should have a monitor host")
         for pop in self.pops:
-            self.assertIn(f"infra/bird/generated/{pop}/bird.conf", self.files)
-            self.assertIn(f"infra/bird/generated/{pop}/state.conf", self.files)
             self.assertIn(f"infra/wireguard/generated/{pop}/wg0.conf", self.files)
+            has_bird = f"infra/bird/generated/{pop}/bird.conf" in self.files
+            self.assertEqual(has_bird, pop in self.bgp_pops, f"{pop}: BIRD config only for BGP POPs")
+            self.assertEqual(f"infra/bird/generated/{pop}/state.conf" in self.files, pop in self.bgp_pops)
         for name in ("dns-nodes.yaml", "nftables-vars.nft", "summary.md"):
             self.assertIn(f"infra/network/generated/{name}", self.files)
 
     def test_bird_exports_exactly_our_two_prefixes(self) -> None:
-        for pop in self.pops:
+        for pop in self.bgp_pops:
             conf = self.files[f"infra/bird/generated/{pop}/bird.conf"]
             with self.subTest(pop=pop):
                 statics = re.findall(r"^\s*route\s+(\S+)\s+unreachable;", conf, re.M)
@@ -206,6 +213,8 @@ class NetgenTest(unittest.TestCase):
 
     def test_bird_uses_provider_addresses_from_overrides(self) -> None:
         for pop, ov in self.overrides["pops"].items():
+            if pop not in self.bgp_pops:
+                continue
             conf = self.files[f"infra/bird/generated/{pop}/bird.conf"]
             self.assertIn(f"router id {ov['provider_ipv4']};", conf)
             self.assertIn(f"local {ov['provider_ipv4']} as 215520;", conf)
@@ -225,7 +234,7 @@ class NetgenTest(unittest.TestCase):
         self.assertNotIn("__WG_ENDPOINT_", wg)
 
     def test_state_conf_initially_withdrawn(self) -> None:
-        for pop in self.pops:
+        for pop in self.bgp_pops:
             state = self.files[f"infra/bird/generated/{pop}/state.conf"]
             self.assertIn("define ANNOUNCE = false;", state)
             self.assertIn("define DRAIN = false;", state)
@@ -234,7 +243,7 @@ class NetgenTest(unittest.TestCase):
         bird = find_bird()
         if bird is None:
             self.skipTest("bird binary not available")
-        for pop in self.pops:
+        for pop in self.bgp_pops:
             conf_dir = os.path.join(self.out1, "infra", "bird", "generated", pop)
             conf = os.path.join(conf_dir, "bird.conf")
             with self.subTest(pop=pop):
@@ -270,6 +279,8 @@ class NetgenTest(unittest.TestCase):
             self.assertEqual(iface["ListenPort"], str(p["wg_listen_port"]))
             self.assertEqual(iface["PrivateKey"], "__WG_PRIVATE_KEY__")
             self.assertEqual(iface["MTU"], str(wg["mtu"]))
+            # Only service POPs forward other POPs' unicast /64s; a monitor never does.
+            self.assertEqual("PostUp" in iface, name not in self.monitors, f"{name}: forwarding PostUp")
             group = "lab" if ("lab" in p["roles"] or p["provider"] == "local") else "production"
             expected_peers = sorted(n for n in groups[group] if n != name)
             by_key = {}
@@ -284,7 +295,13 @@ class NetgenTest(unittest.TestCase):
                 peer = by_key[pub]
                 self.assertEqual(peer["Endpoint"], f"[{ov['provider_ipv6']}]:{op['wg_listen_port']}")
                 allowed = {a.strip() for a in peer["AllowedIPs"].split(",")}
-                self.assertEqual(allowed, {f"{op['wg_address']}/128", op["ipv6_unicast_block"]})
+                expected_allowed = {f"{op['wg_address']}/128"}
+                # The unicast /64 is backhauled only between service POPs: a
+                # monitor has no block, and a monitor must reach the POPs' /48
+                # addresses over the public anycast path it is measuring.
+                if name not in self.monitors and other not in self.monitors:
+                    expected_allowed.add(op["ipv6_unicast_block"])
+                self.assertEqual(allowed, expected_allowed, f"{name} -> {other}: AllowedIPs")
                 self.assertEqual(peer["PersistentKeepalive"], str(wg["persistent_keepalive"]))
         # Symmetry: if a lists b then b lists a (same group), with identical endpoint semantics.
         for a in self.pops:
@@ -305,6 +322,8 @@ class NetgenTest(unittest.TestCase):
         self.assertNotIn("lab", doc["nodes"])
         self.assertEqual(doc["nodes"]["ewr1"], {"ipv4": "203.0.113.10", "ipv6": "2a0f:85c1:368:101::1"})
         self.assertEqual(doc["nodes"]["ams1"]["ipv6"], "2a0f:85c1:368:102::1")
+        # The monitor has no /48 address: both records are provider addresses.
+        self.assertEqual(doc["nodes"]["mon1"], {"ipv4": "203.0.113.250", "ipv6": "2001:db8:fa::fa"})
 
     def test_nftables_vars(self) -> None:
         nft = self.files["infra/network/generated/nftables-vars.nft"]
@@ -313,12 +332,58 @@ class NetgenTest(unittest.TestCase):
         self.assertIn("define bgp_peers_v4 = { 169.254.169.254 }", nft)
         self.assertIn("define bgp_peers_v6 = { 2001:19f0:ffff::1 }", nft)
         self.assertIn("define wg_port = 51820", nft)
-        # Production wg node addresses ::1 (ewr1), ::2 (ams1), ::3 (sgp1); lab (::fe) excluded.
+        # Production wg node addresses ::1 (ewr1), ::2 (ams1), ::3 (sgp1) and
+        # the monitor ::fa (it scrapes over the mesh); lab (::fe) excluded.
         m = re.search(r"define wg_nodes_v6 = \{ ([^}]+) \}", nft)
         self.assertIsNotNone(m)
         self.assertEqual(sorted(x.strip() for x in m.group(1).split(",")),
-                         ["fda5:bc65:9bb1:1::1", "fda5:bc65:9bb1:1::2", "fda5:bc65:9bb1:1::3"])
+                         ["fda5:bc65:9bb1:1::1", "fda5:bc65:9bb1:1::2", "fda5:bc65:9bb1:1::3", "fda5:bc65:9bb1:1::fa"])
         self.assertNotIn("1fe::", nft)  # lab never appears in the production firewall sets
+        # The monitor carries no /48 unicast address, so it is absent from the unicast sets.
+        m = re.search(r"define node_unicast_v6 = \{ ([^}]+) \}", nft)
+        self.assertIsNotNone(m)
+        self.assertEqual(sorted(x.strip() for x in m.group(1).split(",")),
+                         ["2a0f:85c1:368:101::1", "2a0f:85c1:368:102::1", "2a0f:85c1:368:103::1"])
+        self.assertIn("203.0.113.250", nft)  # but its endpoint is in the mesh endpoint set
+
+    # -- monitor role ---------------------------------------------------------
+
+    def test_monitor_is_mesh_member_only(self) -> None:
+        self.assertEqual(self.monitors, {"mon1"})
+        mon = self.pops["mon1"]
+        self.assertEqual(mon["roles"], ["monitor"])
+        self.assertNotIn("ipv6_unicast_block", mon)
+        self.assertNotIn("infra/bird/generated/mon1/bird.conf", self.files)
+        iface, peers = parse_wg(self.files["infra/wireguard/generated/mon1/wg0.conf"])
+        self.assertNotIn("PostUp", iface)
+        self.assertEqual(iface["Address"], "fda5:bc65:9bb1:1::fa/64")
+        # Every production POP is a peer, on its mesh /128 only.
+        self.assertEqual(len(peers), len(self.bgp_pops - {"lab"}))
+        for peer in peers:
+            self.assertRegex(peer["AllowedIPs"], r"^fda5:bc65:9bb1:1::[0-9a-f]+/128$")
+        # No anycast address anywhere in the monitor's files.
+        self.assertNotIn("44.32.58.1", self.files["infra/wireguard/generated/mon1/wg0.conf"])
+        self.assertNotIn("2a0f:85c1:368:1::1", self.files["infra/wireguard/generated/mon1/wg0.conf"])
+        # bgp_peers is derived from BGP POPs only (a monitor on another provider adds nothing).
+        nft = self.files["infra/network/generated/nftables-vars.nft"]
+        self.assertIn("define bgp_peers_v4 = { 169.254.169.254 }", nft)
+
+    def test_check_rejects_monitor_with_unicast_block(self) -> None:
+        def mutate(plan):
+            mon = next(p for p in plan["pops"] if p["name"] == "mon1")
+            mon["ipv6_unicast_block"] = "2a0f:85c1:368:1fa::/64"
+        self._check_broken(mutate, "a monitor has no ipv6_unicast_block")
+
+    def test_check_rejects_monitor_with_other_roles(self) -> None:
+        def mutate(plan):
+            mon = next(p for p in plan["pops"] if p["name"] == "mon1")
+            mon["roles"] = ["monitor", "bgp"]
+        self._check_broken(mutate, "monitor role is exclusive")
+
+    def test_check_rejects_service_pop_without_unicast_block(self) -> None:
+        def mutate(plan):
+            del plan["pops"][0]["ipv6_unicast_block"]
+        self._check_broken(mutate, "ipv6_unicast_block must be a valid IPv6 /64")
 
 
 class BgpAnnounceTest(unittest.TestCase):
