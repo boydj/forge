@@ -143,6 +143,15 @@ wireguard:
 # and stable for the life of the POP. Names are <iata-ish region><n>.
 # provider_ipv4 / provider_ipv6 are null here on purpose: they are filled at
 # deploy time from OpenTofu outputs through `scripts/netgen --overrides`.
+#
+# roles:
+#   forge, bgp, replica   a service POP: anycast + /48 unicast on dummy0, BIRD,
+#                         forge, replication; the default shape
+#   lab                   netns/VM simulation, its own mesh group, never public
+#   monitor               the Prometheus host (docs/monitoring.md): a mesh
+#                         member only. No ipv6_unicast_block, no anycast, no
+#                         BIRD, no bgp-announce; <name>.nodes.<zone> points at
+#                         its provider addresses. Exclusive with every other role.
 # ---------------------------------------------------------------------------
 pops:
   - name: ewr1
@@ -175,6 +184,17 @@ pops:
     wg_address: "fda5:bc65:9bb1:1::3"
     wg_listen_port: 51820
     roles: [forge, bgp, replica]
+    dns: true
+    provider_ipv4: null
+    provider_ipv6: null
+  - name: mon1
+    provider: vultr
+    region: ord                      # Vultr Chicago: no forge POP there, so its
+                                     # anycast probes cross real transit paths
+    index: 250                       # mesh address ::fa; no /48 block (monitor)
+    wg_address: "fda5:bc65:9bb1:1::fa"
+    wg_listen_port: 51820
+    roles: [monitor]
     dns: true
     provider_ipv4: null
     provider_ipv6: null

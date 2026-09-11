@@ -2,9 +2,13 @@
 """netgen: generate per-POP network configuration from infra/network/address-plan.yaml.
 
 Outputs (all deterministic, safe to commit and diff):
-  infra/bird/generated/<pop>/bird.conf      BIRD 2 configuration
+  infra/bird/generated/<pop>/bird.conf      BIRD 2 configuration (POPs with the bgp role)
   infra/bird/generated/<pop>/state.conf     ANNOUNCE/DRAIN constants (initial: withdrawn)
-  infra/wireguard/generated/<pop>/wg0.conf  wg-quick configuration (full mesh)
+  infra/wireguard/generated/<pop>/wg0.conf  wg-quick configuration (full mesh, every node)
+
+A node with roles [monitor] (the Prometheus host) is a mesh member only: it
+gets a wg0.conf and appears as a peer of every production POP, but has no
+BIRD config, no anycast or /48 unicast addresses and no bgp-announce.
   infra/network/generated/dns-nodes.yaml    input for infra/opentofu/modules/cloudflare-dns
   infra/network/generated/nftables-vars.nft nftables `define`s for the host firewall
   infra/network/generated/summary.md        human summary of the plan
@@ -106,8 +110,13 @@ class Pop:
         self.provider_ipv4: str | None = raw.get("provider_ipv4")
         self.provider_ipv6: str | None = raw.get("provider_ipv6")
         self.wg_listen_port: int = int(raw.get("wg_listen_port") or plan["wireguard"]["listen_port"])
-        self.unicast_block = ipaddress.ip_network(raw["ipv6_unicast_block"])
-        self.node_address = self.unicast_block[int(plan["ipv6"].get("pop_node_host", 1))]
+        # A monitor has no /48 unicast block (and no anycast): only a mesh address.
+        self.is_monitor = "monitor" in self.roles
+        block = raw.get("ipv6_unicast_block")
+        self.unicast_block = ipaddress.ip_network(block) if block else None
+        self.node_address = (
+            self.unicast_block[int(plan["ipv6"].get("pop_node_host", 1))] if self.unicast_block is not None else None
+        )
         self.wg_address = ipaddress.ip_address(raw["wg_address"])
         self.is_lab = "lab" in self.roles or self.provider == "local"
         self.upstream_name = self.provider
@@ -115,6 +124,16 @@ class Pop:
     @property
     def public(self) -> bool:
         return not self.is_lab
+
+    @property
+    def bgp(self) -> bool:
+        """True for nodes that run BIRD and announce the prefixes."""
+        return "bgp" in self.roles and not self.is_monitor
+
+    @property
+    def serves(self) -> bool:
+        """True for nodes carrying the service (anycast + /48 unicast): everything but a monitor."""
+        return not self.is_monitor
 
     @property
     def mesh_group(self) -> str:
@@ -294,19 +313,28 @@ def validate(plan: dict) -> Checker:
             continue
         c.check(idx not in indices, f"pops.{name}: duplicate index {idx}")
         indices.add(idx)
-        c.check(raw.get("provider") in upstreams, f"pops.{name}: provider {raw.get('provider')!r} has no bgp.upstreams entry")
-        block = parse_net(raw.get("ipv6_unicast_block"))
-        expected = parse_net(v6["pop_unicast_template"].format(index=idx))
-        if c.check(block is not None and block.version == 6 and block.prefixlen == 64,
-                   f"pops.{name}: ipv6_unicast_block must be a valid IPv6 /64"):
-            c.check(block == expected, f"pops.{name}: ipv6_unicast_block {block} != derived {expected}")
-            c.check(unicast_region is not None and block.subnet_of(unicast_region),
-                    f"pops.{name}: ipv6_unicast_block {block} is outside the pop-unicast region")
-            for other in blocks:
-                c.check(not block.overlaps(other), f"pops.{name}: ipv6_unicast_block {block} overlaps {other}")
-            for s in subnets:
-                c.check(not block.overlaps(s), f"pops.{name}: ipv6_unicast_block {block} overlaps subnet {s}")
-            blocks.append(block)
+        roles = raw.get("roles")
+        c.check(isinstance(roles, list) and bool(roles), f"pops.{name}: roles must be a non-empty list")
+        is_monitor = isinstance(roles, list) and "monitor" in roles
+        if is_monitor:
+            # The monitor is a mesh member only: no service addresses, no BGP.
+            c.check(roles == ["monitor"], f"pops.{name}: the monitor role is exclusive (no forge/bgp/replica/lab)")
+            c.check(raw.get("ipv6_unicast_block") in (None, ""),
+                    f"pops.{name}: a monitor has no ipv6_unicast_block (no anycast, no /48 unicast)")
+        else:
+            c.check(raw.get("provider") in upstreams, f"pops.{name}: provider {raw.get('provider')!r} has no bgp.upstreams entry")
+            block = parse_net(raw.get("ipv6_unicast_block"))
+            expected = parse_net(v6["pop_unicast_template"].format(index=idx))
+            if c.check(block is not None and block.version == 6 and block.prefixlen == 64,
+                       f"pops.{name}: ipv6_unicast_block must be a valid IPv6 /64"):
+                c.check(block == expected, f"pops.{name}: ipv6_unicast_block {block} != derived {expected}")
+                c.check(unicast_region is not None and block.subnet_of(unicast_region),
+                        f"pops.{name}: ipv6_unicast_block {block} is outside the pop-unicast region")
+                for other in blocks:
+                    c.check(not block.overlaps(other), f"pops.{name}: ipv6_unicast_block {block} overlaps {other}")
+                for s in subnets:
+                    c.check(not block.overlaps(s), f"pops.{name}: ipv6_unicast_block {block} overlaps subnet {s}")
+                blocks.append(block)
         wga = parse_addr(raw.get("wg_address"))
         expected_wg = parse_addr(wg["node_address_template"].format(index=idx))
         if c.check(wga is not None and wga.version == 6, f"pops.{name}: wg_address must be a valid IPv6 address"):
@@ -324,7 +352,6 @@ def validate(plan: dict) -> Checker:
                 if a is not None:
                     c.check(not any(a in n for n in (p4, p6) if n is not None),
                             f"pops.{name}: {fam} {a} must be a provider address, not from our prefixes")
-        c.check(isinstance(raw.get("roles"), list) and raw["roles"], f"pops.{name}: roles must be a non-empty list")
     c.check(len(names) >= 1, "pops: at least one POP is required")
 
     # ---- BGP -------------------------------------------------------------
@@ -594,9 +621,10 @@ def render_wg(plan: dict, pop: Pop, pops: list[Pop]) -> str:
     wg = plan["wireguard"]
     keys = wg.get("public_keys") or {}
     mesh = ipaddress.ip_network(wg["mesh_prefix"])
+    kind = "monitor host (mesh member only: no anycast, no BGP)" if pop.is_monitor else "POP"
     lines = [
         f"# {HEADER}",
-        f"# POP {pop.name}: WireGuard full mesh, group {pop.mesh_group}. wg-quick format.",
+        f"# {kind} {pop.name}: WireGuard full mesh, group {pop.mesh_group}. wg-quick format.",
         "# PrivateKey is filled at deploy time from SOPS; the public keys of peers come",
         "# from wireguard.public_keys in the plan or the overrides file.",
         "",
@@ -606,11 +634,16 @@ def render_wg(plan: dict, pop: Pop, pops: list[Pop]) -> str:
         f"ListenPort = {pop.wg_listen_port}",
         "PrivateKey = __WG_PRIVATE_KEY__",
         f"MTU = {wg['mtu']}",
-        "# Other POPs' unicast /64s (inside the anycast /48) arrive here when this POP is",
-        "# the client's nearest one and are forwarded to their owner over the mesh.",
-        "PostUp = sysctl -q -w net.ipv6.conf.all.forwarding=1",
-        "",
     ]
+    if pop.serves:
+        lines += [
+            "# Other POPs' unicast /64s (inside the anycast /48) arrive here when this POP is",
+            "# the client's nearest one and are forwarded to their owner over the mesh.",
+            "PostUp = sysctl -q -w net.ipv6.conf.all.forwarding=1",
+        ]
+    else:
+        lines += ["# A monitor forwards nothing: peers are reached on their mesh /128 only."]
+    lines.append("")
     peers = [p for p in pops if p.name != pop.name and p.mesh_group == pop.mesh_group]
     if not peers:
         lines.append("# (no peers in this mesh group)")
@@ -629,12 +662,20 @@ def render_wg(plan: dict, pop: Pop, pops: list[Pop]) -> str:
             endpoint = f"[{host}]:{peer.wg_listen_port}"
         else:
             endpoint = f"{host}:{peer.wg_listen_port}"
+        # A peer's unicast /64 is backhauled only when it has one (a monitor
+        # has none) AND this node forwards (a monitor does not): the monitor
+        # must reach the POPs' /48 addresses through the public anycast path,
+        # which is exactly what its blackbox probes are meant to measure.
+        allowed = f"{peer.wg_address}/128"
+        if pop.serves and peer.unicast_block is not None:
+            allowed += f", {peer.unicast_block}"
+        what = "monitor" if peer.is_monitor else f"{peer.provider} {peer.region}"
         lines += [
             "[Peer]",
-            f"# {peer.name} ({peer.provider} {peer.region}) index {peer.index}",
+            f"# {peer.name} ({what}) index {peer.index}",
             f"PublicKey = {pubkey}",
             f"Endpoint = {endpoint}",
-            f"AllowedIPs = {peer.wg_address}/128, {peer.unicast_block}",
+            f"AllowedIPs = {allowed}",
             f"PersistentKeepalive = {wg['persistent_keepalive']}",
             "",
         ]
@@ -655,8 +696,10 @@ def render_dns(plan: dict, pops: list[Pop]) -> str:
         "anycast_v6": sorted(str(ipaddress.ip_address(s["address"])) for s in plan["ipv6"]["services"] if s.get("dns")),
         # <pop>.nodes.<zone>: unicast address from our /48 (reachable through the
         # nearest POP plus the mesh) and the provider IPv4 (directly reachable).
+        # A monitor has no /48 address, so both of its records are provider ones.
         "nodes": {
-            p.name: {"ipv4": p.provider_ipv4, "ipv6": str(p.node_address)}
+            p.name: {"ipv4": p.provider_ipv4,
+                     "ipv6": str(p.node_address) if p.node_address is not None else p.provider_ipv6}
             for p in pops if p.dns and p.public
         },
         # Provider addresses only, for a second module instance (e.g.
@@ -683,8 +726,10 @@ def nft_set(name: str, values: list[str]) -> str:
 
 def render_nft(plan: dict, pops: list[Pop]) -> str:
     public = [p for p in pops if p.public]
+    # Service nodes carry /48 unicast and run BGP; a monitor is only a mesh peer.
+    serving = [p for p in public if p.serves]
     upstreams = plan["bgp"]["upstreams"]
-    used_upstreams = sorted({p.upstream_name for p in public})
+    used_upstreams = sorted({p.upstream_name for p in public if p.bgp})
     svc_ports = sorted({port for fam in ("ipv4", "ipv6") for s in plan[fam]["services"] for port in (s.get("ports") or [])})
     out = [
         f"# {HEADER}",
@@ -697,9 +742,9 @@ def render_nft(plan: dict, pops: list[Pop]) -> str:
         nft_set("anycast_v6", sorted(s["address"] for s in plan["ipv6"]["services"] if s.get("ports"))).rstrip("\n"),
         nft_set("service_ports", [str(p) for p in svc_ports]).rstrip("\n"),
         "",
-        "# Per-POP unicast (from the /48) and the WireGuard mesh",
-        nft_set("node_unicast_v6", [str(p.node_address) for p in public]).rstrip("\n"),
-        nft_set("node_unicast_blocks_v6", [str(p.unicast_block) for p in public]).rstrip("\n"),
+        "# Per-POP unicast (from the /48) and the WireGuard mesh (mesh sets include the monitor)",
+        nft_set("node_unicast_v6", [str(p.node_address) for p in serving]).rstrip("\n"),
+        nft_set("node_unicast_blocks_v6", [str(p.unicast_block) for p in serving]).rstrip("\n"),
         f"define wg_mesh_v6 = {plan['wireguard']['mesh_prefix']}",
         nft_set("wg_nodes_v6", [str(p.wg_address) for p in public]).rstrip("\n"),
         f"define wg_port = {plan['wireguard']['listen_port']}",
@@ -744,8 +789,10 @@ def render_summary(plan: dict, pops: list[Pop]) -> str:
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for p in pops:
+        block = f"`{p.unicast_block}`" if p.unicast_block is not None else "-"
+        node = f"`{p.node_address}`" if p.node_address is not None else "-"
         lines.append(
-            f"| {p.name} | {p.provider} | {p.region} | {p.index} | `{p.unicast_block}` | `{p.node_address}` | "
+            f"| {p.name} | {p.provider} | {p.region} | {p.index} | {block} | {node} | "
             f"`{p.wg_address}` | {p.provider_ipv4 or '_unassigned_'} | {p.provider_ipv6 or '_unassigned_'} | {', '.join(p.roles)} |"
         )
     lines += [
@@ -838,14 +885,17 @@ def generate(plan: dict, out_root: str) -> list[str]:
     bird_base = os.path.join(out_root, "infra", "bird", "generated")
     wg_base = os.path.join(out_root, "infra", "wireguard", "generated")
     net_base = os.path.join(out_root, "infra", "network", "generated")
-    prune_pop_dirs(bird_base, {p.name for p in pops})
+    prune_pop_dirs(bird_base, {p.name for p in pops if p.bgp})
     prune_pop_dirs(wg_base, {p.name for p in pops})
     for pop in pops:
-        for rel, content in (
-            (os.path.join(bird_base, pop.name, "bird.conf"), render_bird(plan, pop)),
-            (os.path.join(bird_base, pop.name, "state.conf"), render_state_conf()),
-            (os.path.join(wg_base, pop.name, "wg0.conf"), render_wg(plan, pop, pops)),
-        ):
+        outputs = []
+        if pop.bgp:  # a monitor runs no BIRD
+            outputs += [
+                (os.path.join(bird_base, pop.name, "bird.conf"), render_bird(plan, pop)),
+                (os.path.join(bird_base, pop.name, "state.conf"), render_state_conf()),
+            ]
+        outputs.append((os.path.join(wg_base, pop.name, "wg0.conf"), render_wg(plan, pop, pops)))
+        for rel, content in outputs:
             write_file(rel, content)
             written.append(rel)
     for rel, content in (
