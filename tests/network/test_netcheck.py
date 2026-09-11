@@ -215,11 +215,20 @@ class Rpki(unittest.TestCase):
         self.assertIn("AS7377", r.actual)
 
     def test_unknown_roa_is_drift(self):
+        # A prefix that expects a valid ROA (the /48) drifts when RIPEstat
+        # reports "unknown"; the /24 expects not-found (ADR 0013), see below.
+        table = all_good()
+        v6 = V6.replace(':', '%3A').replace('/', '%2F')
+        table[f"rpki-validation/data.json?resource=AS215520&prefix={v6}"] = (200, ripestat({"status": "unknown", "validating_roas": []}))
+        results, _ = run_checks(table)
+        self.assertEqual(results["rpki:" + V6].status, nc.DRIFT)
+        self.assertEqual(results["rpki:" + V6].actual, "unknown")
+
+    def test_unknown_is_ok_when_not_found_expected(self):
         table = all_good()
         table["rpki-validation/data.json?resource=AS215520&prefix=44.32.58.0%2F24"] = (200, ripestat({"status": "unknown", "validating_roas": []}))
         results, _ = run_checks(table)
-        self.assertEqual(results["rpki:" + V4].status, nc.DRIFT)
-        self.assertEqual(results["rpki:" + V4].actual, "unknown")
+        self.assertEqual(results["rpki:" + V4].status, nc.OK)
 
     def test_wrong_maxlength_is_drift(self):
         table = all_good()
