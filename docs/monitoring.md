@@ -2,17 +2,27 @@
 
 Prometheus scrapes every POP over the WireGuard mesh, evaluates the alert
 rules in `infra/monitoring/prometheus/rules/forge.yml`, and Grafana renders
-`infra/monitoring/grafana/forge-overview.json`. Everything under
-`infra/monitoring/` is the source; nothing there is generated yet.
+`infra/monitoring/grafana/forge-overview.json`. It runs on a dedicated host,
+`mon1` (`roles: [monitor]` in `infra/network/address-plan.yaml`), created
+by `modules/vultr-monitor`, rendered by `modules/monitor-node` and
+configured by `scripts/deploy monitor`; the step-by-step procedure is
+`docs/runbooks/deploy-monitor.md`. Everything under `infra/monitoring/` is
+the source; the only generated artefact is `prometheus.yml`, rendered by
+OpenTofu from the POP list (`tofu output monitor_configs`).
 
 | File | Purpose |
 | --- | --- |
-| `infra/monitoring/prometheus/prometheus.yml.tftpl` | Prometheus configuration, OpenTofu `templatefile()` input |
+| `infra/monitoring/prometheus/prometheus.yml.tftpl` | Prometheus configuration, `templatefile()` input (modules/monitor-node) |
 | `infra/monitoring/prometheus/rules/forge.yml` | alert rules (29) |
-| `infra/monitoring/prometheus/rules/forge_test.yml` | `promtool test rules` unit tests |
+| `infra/monitoring/prometheus/rules/forge_test.yml` | `promtool test rules` unit tests (run by tests/infra when promtool is installed) |
 | `infra/monitoring/blackbox.yml` | blackbox_exporter modules (Gemini and SSH over v4 and v6) |
-| `infra/monitoring/bird-exporter.service` | systemd unit for `bird_exporter` on each POP |
+| `infra/monitoring/bird-exporter.service` | systemd unit for `bird_exporter` on each POP (cloud-init and `deploy sysupdate`) |
 | `infra/monitoring/grafana/forge-overview.json` | the dashboard |
+| `infra/monitoring/grafana/apt-repo.conf` | the upstream Grafana apt repository and its signing-key fingerprint (pinned) |
+| `infra/monitoring/grafana/grafana-server.override.conf` | systemd drop-in: Grafana on loopback, no sign-up, no analytics |
+| `infra/monitoring/grafana/provisioning/` | datasource (local Prometheus) and dashboard provider for the host |
+| `infra/cloud-init/monitor.yaml.tftpl`, `infra/firewall/nftables-monitor.conf.tftpl` | the host's first boot and firewall |
+| `infra/opentofu/modules/vultr-monitor`, `modules/monitor-node`, `environments/dev/monitor.tf` | the instance, the rendering, the wiring |
 | `infra/monitoring/dev/` | `docker compose` stack against `scripts/dev-cluster` |
 
 ## What is scraped where
@@ -27,7 +37,7 @@ the monitoring host's public interface on purpose.
 | --- | --- | --- | --- | --- |
 | `forge` | `[<wg_address>]:9100` | 9100 | the daemon (`internal/metrics`) | `forge.toml` `[metrics] listen`, rendered by `modules/forge-node` |
 | `node` | `[<wg_address>]:9101` | 9101 | `prometheus-node-exporter` (Debian) | collectors: cpu, meminfo, filesystem, netdev, loadavg, diskstats, systemd (`infra/cloud-init/node.yaml.tftpl`) |
-| `bird` | `[<wg_address>]:9324` | 9324 | `prometheus-bird-exporter` (Debian trixie 1.4.2+ds-2, upstream `github.com/czerwonk/bird_exporter`) | unit below; **9324 is not in `PRIVATE_TCP` yet** |
+| `bird` | `[<wg_address>]:9324` | 9324 | `prometheus-bird-exporter` (Debian trixie 1.4.2+ds-2, upstream `github.com/czerwonk/bird_exporter`) | unit below; 9324 is in `PRIVATE_TCP` (modules/forge-node) |
 | `blackbox_*` | public addresses | 1965, 22 | `prometheus-blackbox-exporter` (Debian trixie 0.26.0-1) on the monitoring host, `127.0.0.1:9115` | see Reachability |
 | `prometheus`, `blackbox_exporter` | monitoring host | 9090, 9115 | self | |
 
@@ -83,12 +93,12 @@ Why this exporter: it is the one BIRD exporter packaged in Debian
 (`prometheus-bird-exporter`, depends on `bird2 | bird3`), it needs no
 configuration beyond flags, and it speaks BIRD 2's socket protocol directly;
 the alternative of scraping `birdc` output with a textfile collector would
-cost a cron job and a parser for the same numbers. Install: add
-`prometheus-bird-exporter` to the cloud-init `packages:` list, ship
-`infra/monitoring/bird-exporter.service` as
-`/etc/systemd/system/prometheus-bird-exporter.service` (it shadows the
-packaged unit of the same name), and add `9324` to the firewall's
-`PRIVATE_TCP` define. The unit runs as a `DynamicUser` with
+cost a cron job and a parser for the same numbers. Installed by cloud-init
+on new POPs (`packages:` plus the unit as
+`/etc/systemd/system/prometheus-bird-exporter.service`, which shadows the
+packaged unit of the same name) and by `scripts/deploy sysupdate` on
+existing ones; `9324` is in the firewall's `PRIVATE_TCP` define, which
+`scripts/deploy <pop>` refreshes. The unit runs as a `DynamicUser` with
 `SupplementaryGroups=bird` because Debian creates `/run/bird/bird.ctl` as
 `bird:bird 0660`, and it `Requires=bird.service`, so a node without BIRD
 simply never starts it.
@@ -114,27 +124,56 @@ needs about 2 GB per 90 days at this cardinality (roughly 3,000 series at
 ~$28-33. Alertmanager notifications are free (email, or a webhook to
 whatever is already paid for).
 
-Cheaper alternative, acceptable for the first weeks: run Prometheus on the
-first POP with `--storage.tsdb.retention.time=15d` and Grafana on the
-operator's laptop against the dev compose stack pointed at it. Zero extra
-cost, all of the drawbacks above.
+### The monitoring host as code
 
-Whichever host runs it needs: a mesh address (an entry in
-`infra/network/address-plan.yaml` `pops:` with roles `[monitor]`, index
-e.g. 250; `netgen` then emits its `wg0.conf` and the other POPs' `AllowedIPs`),
-`prometheus`, `prometheus-blackbox-exporter` and `grafana` (Grafana is not in
-Debian; use the upstream apt repository or a container), and the rendered
-`prometheus.yml`.
+`mon1` is the `roles: [monitor]` entry of the address plan (index 250,
+mesh address `fda5:bc65:9bb1:1::fa`, Vultr `ord` so its anycast probes
+cross real transit rather than a local hop). `scripts/netgen` treats a
+monitor as a mesh member only: it gets a `wg0.conf` and every production
+POP gets it as a peer on its mesh `/128`, but it has no BIRD config, no
+anycast or `/48` unicast address, no `bgp-announce`, and
+`mon1.nodes.<zone>` points at its provider addresses. The monitor's own
+peers are the POPs' mesh `/128`s **without** their unicast `/64`s, so a
+probe of a POP's `/48` address leaves through the public interface and
+proves the anycast catchment plus the mesh backhaul, which is the point.
 
-Rendering the template by hand (OpenTofu ships `templatefile`):
+| Piece | What it does |
+| --- | --- |
+| `modules/vultr-monitor` | the instance (`vc2-1c-1gb`) and a Vultr firewall group opening only admin SSH, WireGuard and ICMP |
+| `modules/monitor-node` | renders cloud-init, the monitor firewall and `prometheus.yml` (POP list in, YAML out) |
+| `environments/dev/monitor.tf` | `monitors` map -> both modules; builds the POP list from the created instances; DNS; `monitor_configs` output |
+| `infra/cloud-init/monitor.yaml.tftpl` | first boot from Debian only: `prometheus`, `promtool`, `prometheus-blackbox-exporter`, WireGuard, nftables; sshd on 2200 with `AllowTcpForwarding local` limited to the two loopback UIs; no forge, no BIRD, no secret bundle |
+| `scripts/deploy monitor <mon>` | as root over the bootstrap key: Grafana from `apt.grafana.com` after checking the signing key against the pinned fingerprint, then `prometheus.yml` (from `tofu output monitor_configs`), rules, `blackbox.yml`, Grafana provisioning + dashboard + drop-in, `nftables.conf`, and `wg0.conf` with the key from the bundle; `promtool check config` and `nft -c` before anything is (re)loaded |
 
+Reaching the UIs (nothing is public; Prometheus binds `[::]:9090` for the
+mesh and the firewall admits it from loopback and wg0 only; Grafana binds
+`127.0.0.1:3000`):
+
+```sh
+ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -p 2200 deploy@mon1.nodes.as215520.net
+# http://127.0.0.1:3000  Grafana (admin / admin at first login, then change it)
+# http://127.0.0.1:9090  Prometheus (targets, /alerts, PromQL)
 ```
-cat > render.tf <<'EOF'
-output "cfg" { value = templatefile("infra/monitoring/prometheus/prometheus.yml.tftpl", {
-  monitor_pop = "mon1", monitor_node = "mon1", service_hostname = "git.as215520.net",
-  anycast_v4 = "44.32.58.1", anycast_v6 = "2a0f:85c1:368:1::1",
-  blackbox_address = "127.0.0.1:9115", alertmanager_targets = [],
-  pops = [
-    { name = "ewr1", wg_address = "fda5:bc65:9bb1:1::1", unicast_v6 = "2a0f:85c1:368:101::1", provider_ipv4 = "<tofu output>", provider_ipv6 = "<tofu output>" },
-    { name = "ams1", wg_address = "fda5:bc65:9bb1:1::2", unicast_v6 = "2a0f:85c1:368:102::1", provider_ipv4 = "<tofu output>", provider_ipv6 = "<tofu output>" },
-  ] }) }
+
+Secrets posture: the host holds exactly one secret, its WireGuard private
+key, in `/etc/wireguard/wg0.conf` (0600 root) on the root filesystem. This
+is deliberately simpler than a POP's tmpfs bundle (SR-02): there is no TLS
+identity, host key, cluster secret or user data here, and a compromise of
+mon1 yields mesh access to the POPs' *metrics ports only* (nftables on the
+POPs admits `PRIVATE_TCP` from wg0, nothing else). Rotate it like any POP
+key (`docs/runbooks/rotate-secrets.md`: new key in the bundle, new public
+key in `infra/network/overrides.yaml`, `netgen`, `deploy monitor mon1`,
+`deploy <pop>` on each POP).
+
+Alerting (**TODO**): no Alertmanager is deployed and no destination has been
+chosen. Every rule is evaluated and firing alerts are visible at
+`/alerts` through the tunnel. To add one: install `prometheus-alertmanager`
+on mon1 (Debian), set `alertmanager_targets = ["127.0.0.1:9093"]` in the
+`monitors` map, `tofu apply`, `scripts/deploy monitor mon1`; the template
+emits the `alerting:` block only when the list is non-empty
+(tests/infra covers both shapes).
+
+The dev compose stack (`infra/monitoring/dev/`) is unchanged: it points
+Grafana at `host.docker.internal` and scrapes `scripts/dev-cluster` nodes;
+the production provisioning files under `infra/monitoring/grafana/` are the
+ones `deploy monitor` ships.

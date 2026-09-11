@@ -35,6 +35,7 @@ node exporter on 9101, cluster RPC on 9200, all reachable from wg0 only.
 | [incident-checklist.md](incident-checklist.md) | anything is wrong and you do not know what yet |
 | [deploy-first-node.md](deploy-first-node.md) | bringing up a new environment or the first node from zero |
 | [network-bootstrap.md](network-bootstrap.md) | enabling BGP, WireGuard mesh and anycast for a POP |
+| [deploy-monitor.md](deploy-monitor.md) | bringing up or refreshing the monitoring host (Prometheus, blackbox, Grafana) and bird_exporter on the POPs |
 | [upgrade-and-rollback.md](upgrade-and-rollback.md) | shipping a new binary or config; reverting one |
 | [drain-pop.md](drain-pop.md) | taking a POP out of (or back into) anycast rotation |
 | [move-leader.md](move-leader.md) | moving write ownership of a repository to another node |
@@ -50,16 +51,17 @@ node exporter on 9101, cluster RPC on 9200, all reachable from wg0 only.
 
 ## Alert to runbook map
 
-Alert rules are proposed in `docs/health.md` ("Alert rules"); no alerting
-stack is deployed yet (`infra/monitoring/` is empty), so today these are
-what you would see by hand.
+The rules live in `infra/monitoring/prometheus/rules/forge.yml` and are
+evaluated on the monitoring host (`deploy-monitor.md`); until an
+Alertmanager destination is configured they are visible only at Prometheus
+`/alerts` (through the ssh tunnel), so keep checking the symptoms by hand.
 
 | Alert / symptom | Runbook |
 | --- | --- |
 | `ForgeUnhealthy`, `/status` returns `41` | incident-checklist, then disk-full or restore-from-backup |
-| `ForgeHealthyButNotAnnounced` | drain-pop (was it pinned?), incident-checklist |
+| `ForgeNotAnnounced` | drain-pop (was it pinned?), incident-checklist |
 | `ForgeAnnouncedButUnhealthy`, `ForgeFlapping` | drain-pop (pin it), incident-checklist |
-| `ForgeNoAnnouncers`, `BirdBgpSessionDown` | incident-checklist, network-bootstrap |
+| `ForgeAllPopsWithdrawn`, `BirdSessionDown`, `AnycastUnreachableIPv4/6` | incident-checklist, network-bootstrap |
 | `forge_replica_lag_events` > 0 for long, `pop status` shows `error` | resync-replica |
 | leader node down, pushes refused with "leader is ..." | move-leader, rebuild-pop |
 | backup age > 2 days (`ls /var/backups/forge`) | restore-from-backup (verify), incident-checklist |
