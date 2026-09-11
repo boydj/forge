@@ -10,6 +10,9 @@ pops:
   sgp1:
     provider_ipv4: 66.42.49.14
     provider_ipv6: 2001:19f0:4401:0825:5400:06ff:feac:a4c3
+  mon1:
+    provider_ipv4: 45.63.75.211
+    provider_ipv6: 2001:19f0:5c00:29eb:5400:06ff:feac:f18b
 wireguard:
   public_keys:
     ewr1: qoH6gKdZWIsqPHF33Dvv47BG2I9W56SPefw5qa8Nc2k=
