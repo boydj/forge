@@ -70,6 +70,9 @@ type Options struct {
 	// Health snapshots the node's health controller for /v1/status (nil:
 	// health is not reported). serve passes the controller's Status method.
 	Health func() health.Status
+	// Push runs pushes forwarded from replicas (set by the SSH server via
+	// SetPushHandler; nil means /v1/forward/receive-pack answers 501).
+	Push PushHandler
 }
 
 // Node is the replication service of one forge node.

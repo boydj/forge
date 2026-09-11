@@ -3,12 +3,9 @@ package sshd
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"os/exec"
-	"strconv"
-	"strings"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -24,7 +21,6 @@ type session struct {
 
 	gitProtocolV2 bool
 	execDone      chan struct{} // closed when the exec goroutine has finished
-	stdinDone     chan struct{} // closed when the stdin copier has finished
 }
 
 // Request payloads (RFC 4254 section 6).
@@ -100,10 +96,9 @@ func (s *session) run(reqs <-chan *ssh.Request) {
 	if s.execDone != nil {
 		<-s.execDone
 	}
-	if s.stdinDone != nil {
-		_ = s.ch.Close()
-		<-s.stdinDone
-	}
+	// Closing the channel ends ServeGit's stdin copier if the client never
+	// sent EOF.
+	_ = s.ch.Close()
 }
 
 func (s *session) reply(req *ssh.Request, ok bool) {
@@ -127,122 +122,71 @@ func (s *session) finish(code int) {
 	_ = s.ch.Close()
 }
 
-// exec parses and authorizes the command, runs git and returns the exit
-// code to report. Every refusal is explained on stderr.
+// exec parses the command, runs it through ServeGit and returns the exit
+// code to report. A push for a repository led by another node is relayed to
+// that node when a Forwarder is configured; otherwise it is refused with
+// the leader's name. Every refusal is explained on stderr.
 func (s *session) exec(line string) int {
 	start := time.Now()
 	srv := s.srv
-	log := s.log
 	opName := "invalid"
 	success := false
 	code := 1
 	defer func() {
-		d := time.Since(start)
 		if srv.Metrics != nil {
-			srv.Metrics.ObserveSession(opName, success, d)
+			srv.Metrics.ObserveSession(opName, success, time.Since(start))
 		}
 	}()
 
 	cmd, err := ParseCommand(line)
 	if err != nil {
-		log.Info("ssh exec refused", "command", truncate(line, 80), "err", err)
+		s.log.Info("ssh exec refused", "command", truncate(line, 80), "err", err)
 		s.stderr("forge: " + stripPrefix(err))
 		return 1
 	}
 	opName = cmd.Op.String()
-	log = log.With("op", opName, "repo", cmd.Path())
 
 	ctx, cancel := context.WithTimeout(context.Background(), srv.Config.SessionTimeout)
 	defer cancel()
 
-	diskPath, err := srv.Authz.Authorize(ctx, s.acct, cmd.Owner, cmd.Repo, cmd.Op)
-	if err != nil {
-		switch {
-		case errors.Is(err, ErrNoRepo):
-			s.stderr(fmt.Sprintf("forge: repository '%s' not found", cmd.Path()))
-		case errors.Is(err, ErrForbidden):
-			msg := fmt.Sprintf("forge: forbidden: write access to '%s' denied", cmd.Path())
-			if detail := strings.TrimPrefix(err.Error(), ErrForbidden.Error()); detail != "" && detail != err.Error() {
-				msg += strings.TrimSuffix(detail, "\n")
-			}
-			s.stderr(msg)
-		default:
-			log.Error("authorizer error", "err", err)
-			s.stderr("forge: internal error")
-		}
-		log.Info("ssh exec denied", "err", err, "ms", time.Since(start).Milliseconds())
-		return 1
+	code, err = srv.ServeGit(ctx, s.acct, cmd, s.remote, s.gitProtocolV2, s.ch, s.ch, s.ch.Stderr())
+	var nl *NotLeaderError
+	if errors.As(err, &nl) {
+		code = s.forward(ctx, cmd, nl)
 	}
+	success = code == 0 && ctx.Err() == nil
+	return code
+}
 
-	// A concurrency slot for the git subprocess; do not queue for long.
-	slotCtx, slotCancel := context.WithTimeout(ctx, 10*time.Second)
-	release, err := srv.Git.Acquire(slotCtx)
-	slotCancel()
+// forward relays a push to the repository's leader, or refuses it with the
+// leader's name when no forwarder is configured or the leader cannot be
+// reached.
+func (s *session) forward(ctx context.Context, cmd Command, nl *NotLeaderError) int {
+	srv := s.srv
+	log := s.log.With("op", cmd.Op.String(), "repo", cmd.Path(), "leader", nl.Leader)
+	if srv.Forwarder == nil {
+		s.stderr(refusalMessage(cmd, nl))
+		log.Info("ssh exec denied", "err", nl)
+		return 1
+	}
+	start := time.Now()
+	push := ForwardedPush{AccountID: s.acct.ID, Account: s.acct.Name, Fingerprint: s.acct.Fingerprint,
+		Owner: cmd.Owner, Repo: cmd.Repo, RemoteIP: s.remote, GitProtocolV2: s.gitProtocolV2}
+	code, err := srv.Forwarder.ForwardReceivePack(ctx, nl.Leader, push, s.ch, s.ch, s.ch.Stderr())
 	if err != nil {
-		s.stderr("forge: server busy, try again later")
-		log.Warn("ssh exec refused: no git slot")
+		// Keep the refusal the client would have seen without forwarding
+		// and say why the relay failed; the detail stays in the log.
+		s.stderr(refusalMessage(cmd, nl) + " (leader unreachable)")
+		log.Warn("push forward failed", "err", err, "ms", time.Since(start).Milliseconds())
+		srv.observeForward("replica", "unreachable")
 		return 1
 	}
-	defer release()
-
-	var args []string
-	switch cmd.Op {
-	case OpRead:
-		secs := int(srv.Config.IdleTimeout / time.Second)
-		if secs <= 0 {
-			secs = 1
-		}
-		args = []string{"upload-pack", "--strict", "--timeout=" + strconv.Itoa(secs), "--", diskPath}
-	case OpWrite:
-		args = []string{"receive-pack", "--", diskPath}
+	if code == 0 {
+		srv.observeForward("replica", "ok")
+	} else {
+		srv.observeForward("replica", "rejected")
 	}
-	proc := srv.Git.Command(ctx, "", args...)
-	proc.Env = append(proc.Env,
-		"FORGE_ACCOUNT_ID="+strconv.FormatInt(s.acct.ID, 10),
-		"FORGE_ACCOUNT="+s.acct.Name,
-		"FORGE_REPO="+cmd.Path(),
-		"FORGE_HOOK_SOCKET="+srv.Config.HookSocket,
-		"FORGE_OP="+opName,
-		"FORGE_REMOTE_IP="+s.remote,
-	)
-	if s.gitProtocolV2 {
-		proc.Env = append(proc.Env, "GIT_PROTOCOL=version=2")
-	}
-	// stdout/stderr: exec's own copy goroutines, so Wait returns only after
-	// all output has been written to the channel (bounded by WaitDelay).
-	proc.Stdout = s.ch
-	proc.Stderr = s.ch.Stderr()
-	// stdin: our goroutine. Client EOF closes the pipe so upload-pack
-	// finishes; when the process exits the channel is closed by finish,
-	// which unblocks the copier if the client never sent EOF.
-	stdin, err := proc.StdinPipe()
-	if err != nil {
-		s.stderr("forge: internal error")
-		log.Error("stdin pipe", "err", err)
-		return 1
-	}
-	if err := proc.Start(); err != nil {
-		s.stderr("forge: internal error")
-		log.Error("git start failed", "err", err)
-		return 1
-	}
-	s.stdinDone = make(chan struct{})
-	go func() {
-		defer close(s.stdinDone)
-		_, _ = io.Copy(stdin, s.ch)
-		_ = stdin.Close()
-	}()
-
-	werr := proc.Wait()
-	code = exitCodeOf(proc, werr)
-	timedOut := ctx.Err() != nil
-	if timedOut {
-		s.stderr("forge: session timed out")
-	}
-	success = code == 0 && !timedOut
-	log.Info("ssh session",
-		"exit", code, "ms", time.Since(start).Milliseconds(),
-		"timeout", timedOut, "protocol", protocolName(s.gitProtocolV2))
+	log.Info("push forwarded", "exit", code, "ms", time.Since(start).Milliseconds())
 	return code
 }
 

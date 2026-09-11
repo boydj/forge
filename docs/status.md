@@ -12,8 +12,8 @@ administrator.** M9 (a second provider) was evaluated and deferred: none of
 the 29 North America BGP VPS providers is fully code-driven
 (`docs/research/na-bgp-providers.md`), so Vultr stays the sole upstream.
 Current work: the documentation site (`/docs/`, done), the fleet status
-page (`/status/`, done), the monitoring host `mon1` (in progress) and git
-push forwarding from replicas to the leader (in progress). Hardening
+page (`/status/`, done), the monitoring host `mon1` as code (done, not yet created) and git
+push forwarding from replicas to the leader (done, not yet deployed). Hardening
 (security review, failure injection, load, interop), M11 Mercurial
 prototype and M6 desired state are done.
 
@@ -58,6 +58,12 @@ prototype and M6 desired state are done.
   incident reports from `docs/incidents/`, also served as `/status/feed`
   (gemfeed) and `/status/atom.xml`. No monitoring host needed.
 - Provider evaluation (M9): `docs/research/na-bgp-providers.md`.
+- Push forwarding: a `git push` that reaches a replica is relayed to the
+  repository's leader over the control plane and runs there with the
+  leader's hooks (`docs/replication.md`, Forwarding); reads stay local.
+- Monitoring host as code: `mon1` (Prometheus, blackbox, Grafana) via
+  `modules/vultr-monitor` + `monitor-node`, `deploy monitor`, bird_exporter
+  on every POP (`docs/runbooks/deploy-monitor.md`).
 - M6 prep: IRR/RPKI/PeeringDB desired state, Vultr LOA and BGP checklist,
   `scripts/netcheck` drift checker, `docs/runbooks/network-bootstrap.md`.
 - Network: `infra/network/address-plan.yaml`, `scripts/netgen` (BIRD, WireGuard, DNS, nftables outputs), `scripts/bgp-announce`, BIRD configs validated with `bird -p` 2.14.
@@ -142,8 +148,8 @@ Remaining operator actions:
    POP, mesh member, Prometheus + blackbox + Grafana; bird_exporter and port
    9324 on the POPs via `deploy sysupdate`. Alert destination still to be
    chosen (alerts visible in the Prometheus UI until then).
-3. Git push forwarding: a push landing on a replica is relayed to the
-   leader over the control plane (in progress).
+3. Deploy git push forwarding (same rollout as item 1): a push landing on
+   a replica is relayed to the leader over the control plane.
 4. IPv4 /24 anycast reachability is uneven from some networks (no ROA
    possible, ADR 0013; observed a Cogent/Marseille detour). The IPv6 /48
    anycast is clean; mon1's blackbox probes will quantify it.

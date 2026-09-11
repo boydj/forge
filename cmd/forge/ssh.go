@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"as215520.net/forge/internal/forge"
 	"as215520.net/forge/internal/hooks"
 	"as215520.net/forge/internal/metrics"
+	"as215520.net/forge/internal/repl"
 	"as215520.net/forge/internal/sshd"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/web"
@@ -53,7 +55,9 @@ func (a sshAuth) Authorize(ctx context.Context, acct *sshd.Account, owner, repo 
 			return "", fmt.Errorf("%w: repository is archived", sshd.ErrForbidden)
 		}
 		if !a.f.IsLeader(acc.Repo) {
-			return "", fmt.Errorf("%w: pushes for this repository are accepted by node %s", sshd.ErrForbidden, acc.Repo.LeaderNode)
+			// The SSH server forwards the push to the leader when the
+			// cluster is up, or refuses it with this name otherwise.
+			return "", &sshd.NotLeaderError{Leader: acc.Repo.LeaderNode}
 		}
 	}
 	return a.f.RepoPath(acc.Repo.Owner, acc.Repo.Name), nil
@@ -61,9 +65,32 @@ func (a sshAuth) Authorize(ctx context.Context, acct *sshd.Account, owner, repo 
 
 var _ store.Role
 
-// startSSH starts the hook socket and the SSH listeners. It returns a
-// shutdown function.
-func startSSH(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *metrics.Registry, log *slog.Logger, errc chan error) (func(context.Context) error, error) {
+// pushForwarder adapts the replication node to sshd.PushForwarder (replica
+// side: relay a push to the leader).
+type pushForwarder struct{ n *repl.Node }
+
+func (p pushForwarder) ForwardReceivePack(ctx context.Context, leader string, push sshd.ForwardedPush, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	proto := ""
+	if push.GitProtocolV2 {
+		proto = "version=2"
+	}
+	return p.n.ForwardPush(ctx, leader, repl.PushRequest{Owner: push.Owner, Repo: push.Repo, AccountID: push.AccountID,
+		Account: push.Account, Fingerprint: push.Fingerprint, RemoteIP: push.RemoteIP, GitProtocol: proto}, stdin, stdout, stderr)
+}
+
+// pushHandler adapts the SSH server to repl.PushHandler (leader side: run a
+// push relayed by a replica).
+type pushHandler struct{ s *sshd.Server }
+
+func (p pushHandler) ServeForwardedPush(ctx context.Context, req repl.PushRequest, stdin io.Reader, stdout, stderr io.Writer) int {
+	return p.s.ServeForwardedPush(ctx, sshd.ForwardedPush{Owner: req.Owner, Repo: req.Repo, AccountID: req.AccountID,
+		Account: req.Account, Fingerprint: req.Fingerprint, RemoteIP: req.RemoteIP, GitProtocolV2: req.GitProtocol == "version=2"}, stdin, stdout, stderr)
+}
+
+// startSSH starts the hook socket and the SSH listeners. When rn is set,
+// pushes for repositories led elsewhere are relayed through it and pushes
+// relayed by peers are served. It returns a shutdown function.
+func startSSH(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *metrics.Registry, rn *repl.Node, log *slog.Logger, errc chan error) (func(context.Context) error, error) {
 	hookSrv := &hooks.Server{Handler: app}
 	if err := hookSrv.Listen(cfg.HookSocket()); err != nil {
 		return nil, fmt.Errorf("hook socket: %w", err)
@@ -110,6 +137,10 @@ func startSSH(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *me
 		PreviousHostKeys: previous,
 		Logger:           log.With("proto", "ssh"),
 		Metrics:          reg.SSH(),
+	}
+	if rn != nil {
+		srv.Forwarder = pushForwarder{n: rn}
+		rn.SetPushHandler(pushHandler{s: srv})
 	}
 	for _, addr := range cfg.SSH.Listen {
 		l, err := net.Listen("tcp", addr)

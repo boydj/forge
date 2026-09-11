@@ -66,6 +66,7 @@ From `internal/metrics/metrics.go` (also listed in `docs/operations.md`):
 | `forge_gemini_connections`, `forge_ssh_connections` (gauge) | | `GeminiConnectionsHigh`, connections panel |
 | `forge_ssh_sessions_total` (counter) | `op` (upload/receive), `result` (ok/error) | `SSHSessionErrors` |
 | `forge_ssh_session_seconds` (histogram) | `op` | git row |
+| `forge_ssh_push_forwards_total` (counter) | `role` (replica/leader), `result` (ok/rejected/unreachable) | not alerted yet; `unreachable` on a replica means its leader was down during a push |
 | `forge_repositories`, `forge_repository_bytes`, `forge_users` (gauge) | | storage row |
 | `forge_disk_free_bytes` (gauge) | | `DiskLow` |
 | `forge_replica_lag_events` (gauge) | `leader` | `ReplicaLagHigh` |

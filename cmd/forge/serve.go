@@ -103,10 +103,6 @@ func runServe(args []string) error {
 		app.OnPush = rn.OnPush
 		handler.Forwarder = rn
 		handler.Fleet = fleetSource{rn: rn}
-		if err := rn.Start(ctx, errc); err != nil {
-			return fmt.Errorf("replication start: %w", err)
-		}
-		log.Info("replication enabled", "control", cfg.Cluster.ControlListen, "peers", len(cfg.Cluster.Peers), "metadata_leader", rn.MetadataLeader())
 	}
 
 	for _, addr := range cfg.Gemini.Listen {
@@ -118,9 +114,17 @@ func runServe(args []string) error {
 		go func() { errc <- gsrv.Serve(l) }()
 	}
 
-	sshShutdown, err := startSSH(ctx, cfg, app, reg, log, errc)
+	// The SSH server installs the push handler on rn, so it is built before
+	// the control plane starts serving.
+	sshShutdown, err := startSSH(ctx, cfg, app, reg, rn, log, errc)
 	if err != nil {
 		return err
+	}
+	if rn != nil {
+		if err := rn.Start(ctx, errc); err != nil {
+			return fmt.Errorf("replication start: %w", err)
+		}
+		log.Info("replication enabled", "control", cfg.Cluster.ControlListen, "peers", len(cfg.Cluster.Peers), "metadata_leader", rn.MetadataLeader())
 	}
 
 	var msrv *http.Server

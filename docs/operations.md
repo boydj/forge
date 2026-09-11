@@ -188,6 +188,7 @@ the corresponding feature exists.
 | `forge_ssh_sessions_total` | counter | `op` (`upload`/`receive`), `result` (`ok`/`error`) |
 | `forge_ssh_session_seconds` | histogram | `op` |
 | `forge_ssh_connections` | gauge | |
+| `forge_ssh_push_forwards_total` | counter | `role` (`replica`/`leader`), `result` (`ok`/`rejected`/`unreachable`) |
 | `forge_repositories`, `forge_repository_bytes`, `forge_users`, `forge_disk_free_bytes` | gauge | planned population |
 | `forge_replica_lag_events` | gauge | `leader` (M5) |
 | `forge_leader_repositories`, `forge_healthy`, `forge_bgp_announced`, `forge_backup_age_seconds` | gauge | M5 / health worker |

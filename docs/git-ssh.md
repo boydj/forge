@@ -246,9 +246,20 @@ valid forms and injection, option, traversal, unicode and length cases.
   `forge.service` (`RestrictSUIDSGID=yes`) blocks, breaking reflog directory
   creation on the first push. `forge admin maintenance` unsets it on any
   older repository.
-- Under anycast, a `git push` can land on a replica, which refuses it and
-  names the leader (single-writer, ADR 0011): `forbidden: pushes for this
-  repository are accepted by node <leader>`. Retrying reaches the leader
-  once routing settles, or push to the leader's unicast name
-  (`<leader>.nodes.<zone>`, same host key). Automatic push forwarding is
-  future work.
+- Under anycast, a `git push` can land on a replica. The replica relays the
+  whole receive-pack session to the repository's leader over the control
+  plane (single-writer, ADR 0011; see `docs/replication.md`, Forwarding):
+  the client sees the leader's hook output and exit status as if it had
+  pushed there, and the replica catches up through normal replication
+  within a second. Only when the leader cannot be reached is the push
+  refused: `forbidden: pushes for this repository are accepted by node
+  <leader> (leader unreachable)`. Retrying later, or pushing to the leader's
+  unicast name (`<leader>.nodes.<zone>`, same host key), then works once
+  the leader is back. Fetches and clones are always served locally.
+- Push forwarding in the code: `internal/sshd` `Server.ServeGit` is the one
+  path that authorises and runs a transport command; a local session and a
+  forwarded push (`Server.ServeForwardedPush`, reached through
+  `/v1/forward/receive-pack`) both go through it, so hooks, quotas, the
+  hardened environment and the identity exported to `forge hook` are the
+  same either way. `forge_ssh_push_forwards_total{role,result}` counts
+  relays on both ends.

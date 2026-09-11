@@ -51,9 +51,11 @@ func (a *testAuth) AuthenticateKey(_ context.Context, key ssh.PublicKey) (*Accou
 }
 
 // testAuthz knows alice/proj (alice writes, everyone reads) and
-// alice/readonly (nobody writes). Everything else does not exist.
+// alice/readonly (nobody writes). Everything else does not exist. Writes to
+// a repository in leaders are answered with NotLeaderError for that node.
 type testAuthz struct {
-	repos map[string]string // owner/repo -> disk path
+	repos   map[string]string // owner/repo -> disk path
+	leaders map[string]string // owner/repo -> leader node name
 }
 
 func (z *testAuthz) Authorize(_ context.Context, acct *Account, owner, repo string, op Op) (string, error) {
@@ -61,8 +63,13 @@ func (z *testAuthz) Authorize(_ context.Context, acct *Account, owner, repo stri
 	if !ok {
 		return "", ErrNoRepo
 	}
-	if op == OpWrite && (repo == "readonly" || acct.Name != owner) {
-		return "", ErrForbidden
+	if op == OpWrite {
+		if leader, ok := z.leaders[owner+"/"+repo]; ok {
+			return "", &NotLeaderError{Leader: leader}
+		}
+		if repo == "readonly" || acct.Name != owner {
+			return "", ErrForbidden
+		}
 	}
 	return p, nil
 }
@@ -184,7 +191,9 @@ func writeClientKey(t *testing.T, path string) ssh.PublicKey {
 	return sp
 }
 
-func newTestEnv(t *testing.T, opts ...func(*Config)) *testEnv {
+// newTestEnv starts a server with alice's key registered. opts run on the
+// server before it serves (settings, a Forwarder, a different Authz).
+func newTestEnv(t *testing.T, opts ...func(*Server)) *testEnv {
 	t.Helper()
 	dir := t.TempDir()
 	b, err := git.New(git.Options{HomeDir: dir, HooksDir: filepath.Join(dir, "hooks"), MaxConcurrent: 4})
@@ -223,7 +232,7 @@ func newTestEnv(t *testing.T, opts ...func(*Config)) *testEnv {
 		Metrics: metrics,
 	}
 	for _, o := range opts {
-		o(&srv.Config)
+		o(srv)
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -716,7 +725,7 @@ func TestGoClientExecOnce(t *testing.T) {
 }
 
 func TestSessionTimeoutKillsGit(t *testing.T) {
-	e := newTestEnv(t, func(c *Config) { c.SessionTimeout = 500 * time.Millisecond })
+	e := newTestEnv(t, func(s *Server) { s.Config.SessionTimeout = 500 * time.Millisecond })
 	c := e.goClient(t)
 	sess, err := c.NewSession()
 	if err != nil {
@@ -748,7 +757,7 @@ func TestSessionTimeoutKillsGit(t *testing.T) {
 }
 
 func TestConnectionLimits(t *testing.T) {
-	e := newTestEnv(t, func(c *Config) { c.MaxConnsPerIP = 2 })
+	e := newTestEnv(t, func(s *Server) { s.Config.MaxConnsPerIP = 2 })
 	c1 := e.goClient(t)
 	c2 := e.goClient(t)
 	// Third connection from the same IP is closed before any handshake.
@@ -776,7 +785,7 @@ func TestConnectionLimits(t *testing.T) {
 }
 
 func TestHandshakeTimeout(t *testing.T) {
-	e := newTestEnv(t, func(c *Config) { c.HandshakeTimeout = 300 * time.Millisecond })
+	e := newTestEnv(t, func(s *Server) { s.Config.HandshakeTimeout = 300 * time.Millisecond })
 	conn, err := net.Dial("tcp", e.addr.String())
 	if err != nil {
 		t.Fatal(err)
