@@ -136,10 +136,17 @@ helper_file() { # helper_file <target> <local file> <verb> [args]: file on stdin
   if [ "$DRY" = 1 ]; then echo "  ssh $t: sudo forge-deploy-helper $* < ${src#$ROOT/}" >&2; return 0; fi
   ssh "${SSH_OPTS[@]}" -p "$PORT" "$t" sudo -n "$HELPER" "$@" < "$src"
 }
+shquote() { # shquote <arg>...: single-quote each argument for a remote POSIX shell (ssh flattens argv into one string)
+  local a out=""
+  for a in "$@"; do out+=" '${a//\'/\'\\\'\'}'"; done
+  printf '%s' "${out# }"
+}
 rscript() { # rscript <root@host> [args...] <<'EOT' ... EOT : run a root shell script from stdin (bootstrap/sysupdate only)
   local t=$1; shift
-  if [ "$DRY" = 1 ]; then echo "  ssh $t: sh -s -- $* <<EOT" >&2; sed 's/^/    /' >&2; echo "  EOT" >&2; return 0; fi
-  ssh "${SSH_OPTS[@]}" -p "$PORT" "$t" sh -s -- "$@"
+  if [ "$DRY" = 1 ]; then echo "  ssh $t: sh -s -- $(shquote "$@") <<EOT" >&2; sed 's/^/    /' >&2; echo "  EOT" >&2; return 0; fi
+  # Arguments travel quoted: ssh joins them with spaces and the remote shell
+  # re-splits, which would break any value containing whitespace.
+  ssh "${SSH_OPTS[@]}" -p "$PORT" "$t" "sh -s -- $(shquote "$@")"
 }
 root_file() { # root_file <root@host> <local> <remote> <mode>: install a file as root (sysupdate/bootstrap)
   local t=$1 src=$2 dst=$3 mode=$4
@@ -348,7 +355,9 @@ check_monitor_configs() { # check_monitor_configs <dir>: local promtool/nft when
   else
     log "promtool not run locally; the host checks before reloading"
   fi
-  if command -v nft >/dev/null 2>&1 && [ -s "$dir/nftables.conf" ]; then
+  # nft -c needs netlink (CAP_NET_ADMIN) even to check: unprivileged it fails
+  # with "Operation not permitted" on every rule, so only check as root.
+  if command -v nft >/dev/null 2>&1 && [ -s "$dir/nftables.conf" ] && [ "$(id -u)" = 0 ]; then
     nft -c -f "$dir/nftables.conf" || die "nft rejected nftables.conf"
   fi
 }
@@ -370,7 +379,8 @@ if ! dpkg -s "$pkg" >/dev/null 2>&1; then
   [ "$got" = "$fpr" ] || { echo "grafana apt key fingerprint $got does not match the pinned $fpr; not installing" >&2; exit 1; }
   gpg --dearmor < "$tmp/key.asc" > /etc/apt/keyrings/grafana.gpg && chmod 0644 /etc/apt/keyrings/grafana.gpg
   printf '%s\n' "$repo" > /etc/apt/sources.list.d/grafana.list
-  apt-get update -qq && apt-get install -qq -y "$pkg" >/dev/null
+  apt-get update -qq
+  apt-get install -qq -y "$pkg" >/dev/null
   echo "installed $pkg"
 fi
 install -d -m 0755 /etc/grafana/provisioning/datasources /etc/grafana/provisioning/dashboards
