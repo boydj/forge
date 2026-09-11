@@ -24,6 +24,7 @@ type Registry struct {
 	sshSessions *prometheus.CounterVec
 	sshDuration *prometheus.HistogramVec
 	sshConns    prometheus.Gauge
+	sshForwards *prometheus.CounterVec
 
 	RepoCount     prometheus.Gauge
 	RepoBytes     prometheus.Gauge
@@ -49,6 +50,7 @@ func New() *Registry {
 	r.sshSessions = f.counterVec("forge_ssh_sessions_total", "SSH git sessions by operation and result.", "op", "result")
 	r.sshDuration = f.histVec("forge_ssh_session_seconds", "SSH session duration.", "op")
 	r.sshConns = f.gauge("forge_ssh_connections", "Open SSH connections.")
+	r.sshForwards = f.counterVec("forge_ssh_push_forwards_total", "Pushes relayed between replica and leader, by this node's role and result.", "role", "result")
 	r.RepoCount = f.gauge("forge_repositories", "Number of repositories.")
 	r.RepoBytes = f.gauge("forge_repository_bytes", "Total repository bytes.")
 	r.UserCount = f.gauge("forge_users", "Number of accounts.")
@@ -105,6 +107,12 @@ func (s *SSHMetrics) ObserveSession(op string, success bool, d time.Duration) {
 
 // ConnectionsChanged adjusts the open-connection gauge.
 func (s *SSHMetrics) ConnectionsChanged(delta int) { s.r.sshConns.Add(float64(delta)) }
+
+// ObserveForward records one forwarded push (sshd.ForwardMetrics): role is
+// "replica" or "leader", result "ok", "rejected" or "unreachable".
+func (s *SSHMetrics) ObserveForward(role, result string) {
+	s.r.sshForwards.WithLabelValues(role, result).Inc()
+}
 
 type factory struct{ reg *prometheus.Registry }
 

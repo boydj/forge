@@ -122,10 +122,11 @@ func (n *Node) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/users", n.withAuth(n.handleUsers))
 	mux.HandleFunc("POST /v1/notify", n.withAuth(n.handleNotify))
 	mux.HandleFunc("POST /v1/forward", n.withAuth(n.handleForward))
+	mux.HandleFunc("POST "+pushPath, n.withAuth(n.handleForwardPush))
 	mux.HandleFunc("GET /v1/git/{owner}/{repo}/info/refs", n.withAuth(n.handleInfoRefs))
 	mux.HandleFunc("POST /v1/git/{owner}/{repo}/git-upload-pack", n.withAuth(n.handleUploadPack))
 	mux.HandleFunc("POST /v1/git/{owner}/{repo}/git-receive-pack", n.withAuth(func(w http.ResponseWriter, r *http.Request, _ string) {
-		http.Error(w, "pushes are not accepted over the control plane", http.StatusForbidden)
+		http.Error(w, "smart-HTTP pushes are not accepted over the control plane; forwarded pushes use "+pushPath, http.StatusForbidden)
 	}))
 	mux.HandleFunc("/", n.withAuth(func(w http.ResponseWriter, r *http.Request, _ string) {
 		http.NotFound(w, r)

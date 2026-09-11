@@ -48,14 +48,16 @@ are future work.
 | `GET /v1/users` | metadata leader | snapshot of users, certificates, ssh_keys |
 | `POST /v1/notify {repo_id}` | every node | ask the worker to sync one repository now |
 | `POST /v1/forward` | leader | run a forwarded Titan write (see Forwarding) |
+| `POST /v1/forward/receive-pack?owner&repo&account_id&account&fingerprint&remote&protocol` | leader | run a forwarded `git push`: the connection is upgraded to a raw stream carrying the receive-pack session (see Forwarding) |
 | `GET /v1/git/{owner}/{name}.git/info/refs?service=git-upload-pack`, `POST .../git-upload-pack` | leader | git smart HTTP, read only |
 
 The git endpoints spawn `git upload-pack --stateless-rpc [--advertise-refs]`
 exactly like `git http-backend`, with the client's `Git-Protocol` header
 passed as `GIT_PROTOCOL` (protocol v2), gzip request bodies accepted, and
 the hardened environment from `internal/vcs/git` (fsck on transfer, no
-hooks, no user config). `git-receive-pack` is refused: pushes never travel
-over the control plane.
+hooks, no user config). Smart-HTTP `git-receive-pack` is refused: the only
+pushes on the control plane are SSH sessions relayed through
+`/v1/forward/receive-pack`, which run with hooks on the leader.
 
 Replicas fetch with an ordinary `git fetch --prune --no-tags
 +refs/heads/*:refs/heads/* +refs/tags/*:refs/tags/*` against
@@ -204,7 +206,7 @@ across origins, id order within one origin).
 
 | Situation | Effect | Recovery |
 | --- | --- | --- |
-| Repository leader down | reads served from every replica; pushes to replicas are refused with the leader's name; Titan writes on replicas fail with "not the leader" (or forwarding error) | wait, or `move-leader` from the leader once it is back; automatic failover is not in v1 |
+| Repository leader down | reads served from every replica; pushes to replicas are refused with the leader's name and "(leader unreachable)"; Titan writes on replicas fail with "not the leader" (or forwarding error) | wait, or `move-leader` from the leader once it is back; automatic failover is not in v1 |
 | Metadata leader down | registrations and key changes fail everywhere else; existing identities keep working from local copies | wait; there is no metadata leader election in v1 |
 | Replica behind | stale reads on that POP; `forge_replica_lag_events{leader}` > 0, `repo_replicas.status` = `error` with the cause in `detail` | it retries every interval; `forge admin repl status` shows it, `resync` forces a full pass |
 | Sync interrupted (restart, timeout) | partial cycle; nothing corrupt: cursors and refs only move after success | next cycle repeats the same work |
@@ -259,13 +261,51 @@ certificate, re-runs authorisation and the write through its normal Titan
 handler (`repl.Handler`, implemented in `internal/web`), and returns the
 Gemini status and meta line, which the replica relays unchanged. The leader
 logs the originating node. A compromised replica can therefore only replay
-what a real client sent it (threat model T-37). Push forwarding is not in
-v1: `git push` to a replica is refused with a message naming the leader.
+what a real client sent it (threat model T-37).
+
+A `git push` for a repository this node does not lead is forwarded the same
+way, as a live session rather than a request/response:
+
+1. The replica's SSH server authenticates the key and parses the command as
+   usual. Its authorizer answers `sshd.NotLeaderError{Leader}` for a write
+   to a repository led elsewhere.
+2. The replica (`repl.Node.ForwardPush`) opens one connection to the
+   leader's control address, sends `POST /v1/forward/receive-pack` with the
+   cluster secret, its node name and the identity it verified (account id,
+   name, key fingerprint), plus the client's address and `GIT_PROTOCOL`,
+   and the leader answers `101 Switching Protocols`.
+3. From then on the connection is a byte stream. Replica to leader carries
+   the client's stdin verbatim and is half-closed when the client sends
+   EOF, so `receive-pack` sees the end of the pack. Leader to replica is
+   framed (`kind, length, payload`: stdout, stderr, exit) so the client's
+   stdout, stderr and exit status stay separate; the replica copies them
+   onto the SSH channel and reports the leader's exit status.
+4. The leader (`sshd.Server.ServeForwardedPush`) re-parses the repository
+   path with the SSH grammar, builds the account from the asserted identity
+   and calls the same `ServeGit` a local push uses: authorisation
+   (repository, archived, disabled account, leadership), the git
+   concurrency slot, the hardened environment, `FORGE_*` hook identity and
+   the pre-receive, proc-receive and post-receive hooks all run on the
+   leader, and post-receive notifies the replicas as after any push.
+
+Trust model: the replica asserts an identity it authenticated by SSH key
+and the leader trusts that assertion, exactly as it trusts a replica's TLS
+verification of a client certificate for Titan writes. Everything else is
+decided on the leader. A compromised replica can therefore push as any user
+whose key it accepted; it could already do that to its own copies, and the
+control plane's peer binding (secret plus configured address) keeps a
+stray mesh process from using the endpoint. If the leader is unreachable or
+the stream breaks, the replica refuses the push with the leader's name and
+"(leader unreachable)"; a stream that breaks after the pack was sent may or
+may not have been applied, and `git push` shows that by the missing
+report-status, so the client retries. Fetches and clones are never
+forwarded. `forge_ssh_push_forwards_total{role,result}` counts relays on
+the replica (`role=replica`) and runs on the leader (`role=leader`).
 
 ## Future work
 
-- Push forwarding (proxy the SSH exec stream to the leader) or a
-  leader-specific push hostname.
+- A leader-specific push hostname as an alternative to forwarding for very
+  large pushes.
 - Automatic failover with a signed leader manifest per repository (T-34,
   T-38) and verification of fetched refs against it.
 - Metadata leader election, or a proper global metadata store, so that

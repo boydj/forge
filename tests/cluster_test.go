@@ -117,14 +117,39 @@ func TestTwoNodeReplication(t *testing.T) {
 		_, _, body := b.request("gemini", "/feed", nil, "")
 		return strings.Contains(body, "alice created branch main")
 	})
-	// Replica refuses pushes and names the leader.
+	// A push to the replica is forwarded to the leader: it lands on a and
+	// comes back to b through replication.
 	bclone := filepath.Join(t.TempDir(), "b")
 	alice.must("", "clone", "-q", fmt.Sprintf("ssh://git@127.0.0.1:%d/alice/proj.git", b.sshPort), bclone)
 	_ = os.WriteFile(filepath.Join(bclone, "x"), []byte("x"), 0o644)
 	alice.must(bclone, "add", "x")
 	alice.must(bclone, "commit", "-qm", "on b")
-	if out, err := alice.run(bclone, "push", "-q"); err == nil || !strings.Contains(out, "node a") {
-		t.Fatalf("push to replica: %v\n%s", err, out)
+	alice.must(bclone, "push", "-q")
+	if status, _, body := a.request("gemini", "/~alice/proj/", nil, ""); status != 20 || !strings.Contains(body, "on b") {
+		t.Fatalf("forwarded push not on leader: %d\n%s", status, body)
+	}
+	waitFor(t, "forwarded push replicated back", 20*time.Second, func() bool {
+		status, _, body := b.request("gemini", "/~alice/proj/", nil, "")
+		return status == 20 && strings.Contains(body, "on b")
+	})
+	// The leader's hooks decide forwarded pushes: bob (a reader) may not
+	// update main and hears why from the leader.
+	a.admin("user", "create", "bob")
+	bob := newGitClient(t, b)
+	a.admin("key", "add", "bob", bob.key+".pub")
+	bobclone := filepath.Join(t.TempDir(), "bob")
+	waitFor(t, "bob's key on replica", 15*time.Second, func() bool {
+		_, err := bob.run("", "clone", "-q", fmt.Sprintf("ssh://git@127.0.0.1:%d/alice/proj.git", b.sshPort), bobclone)
+		if err != nil {
+			_ = os.RemoveAll(bobclone)
+		}
+		return err == nil
+	})
+	_ = os.WriteFile(filepath.Join(bobclone, "bob"), []byte("bob"), 0o644)
+	bob.must(bobclone, "add", "bob")
+	bob.must(bobclone, "commit", "-qm", "bob on b")
+	if out, err := bob.run(bobclone, "push", "-q"); err == nil || !strings.Contains(out, "you can only propose changes here") {
+		t.Fatalf("reader push via replica: %v\n%s", err, out)
 	}
 
 	// Register a certificate on the metadata leader (a), wait for it on b,
@@ -170,4 +195,17 @@ func TestTwoNodeReplication(t *testing.T) {
 		status, _, body := a.request("gemini", "/~alice/proj/", nil, "")
 		return status == 20 && strings.Contains(body, "after move")
 	})
+	// With the leader (now b) down, a push through a is refused with the
+	// leader's name rather than hanging or being applied locally.
+	stopNode(t, b)
+	_ = os.WriteFile(filepath.Join(bclone, "z"), []byte("z"), 0o644)
+	alice.must(bclone, "add", "z")
+	alice.must(bclone, "commit", "-qm", "leader down")
+	out, err := alice.run(bclone, "push", "-q", fmt.Sprintf("ssh://git@127.0.0.1:%d/alice/proj.git", a.sshPort), "HEAD:main")
+	if err == nil || !strings.Contains(out, "node b") || !strings.Contains(out, "leader unreachable") {
+		t.Fatalf("push with leader down: %v\n%s", err, out)
+	}
+	if status, _, body := a.request("gemini", "/~alice/proj/", nil, ""); status != 20 || strings.Contains(body, "leader down") {
+		t.Fatalf("replica applied a push while its leader was down: %d\n%s", status, body)
+	}
 }

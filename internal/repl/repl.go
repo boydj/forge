@@ -66,6 +66,9 @@ type Options struct {
 	// Forward handles writes forwarded from replicas (set by the web layer;
 	// nil means /v1/forward answers 501).
 	Forward Handler
+	// Push runs pushes forwarded from replicas (set by the SSH server via
+	// SetPushHandler; nil means /v1/forward/receive-pack answers 501).
+	Push PushHandler
 }
 
 // Node is the replication service of one forge node.

@@ -116,6 +116,9 @@ type Server struct {
 	// Logger receives structured logs; nil uses slog.Default().
 	Logger  *slog.Logger
 	Metrics Metrics
+	// Forwarder relays pushes for repositories led by another node. nil
+	// refuses them with the leader's name (see forward.go).
+	Forwarder PushForwarder
 
 	sshConfig  *ssh.ServerConfig
 	listeners  []net.Listener
