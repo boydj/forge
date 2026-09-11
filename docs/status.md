@@ -4,12 +4,11 @@ Updated: 2026-09-10 (evening)
 
 ## Current milestone
 
-**M8 complete: two POPs, ewr1 (Vultr New Jersey) and ams1 (Vultr
-Amsterdam), announce 44.32.58.0/24 and 2a0f:85c1:368::/48 via Vultr
-AS20473 as anycast; they are joined by WireGuard and replicate (metadata
-leader ewr1). git.as215520.net resolves to 44.32.58.1 and
-2a0f:85c1:368:1::1. The first account (jdb, administrator) exists.** M9
-(second provider) is next. Hardening (security review, failure
+**Three POPs announce 44.32.58.0/24 and 2a0f:85c1:368::/48 via Vultr
+AS20473 as anycast: ewr1 (New Jersey), ams1 (Amsterdam), sgp1 (Singapore),
+joined by a WireGuard mesh and replicating from metadata leader ewr1. The
+forge hosts its own source (jdb/forge, replicated to all three); jdb is the
+administrator. M9 (a second provider, for provider diversity) is next.** Hardening (security review, failure
 injection, load, interop), M11 Mercurial prototype and M6 desired state are
 done.
 
@@ -52,13 +51,12 @@ done.
 
 ## Running services
 
-- **ewr1** (Vultr `ewr`, 64.176.195.46 / 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3) and
-  **ams1** (Vultr `ams`, 78.141.214.215 / 2a05:f480:1400:3d99:5400:06ff:feac:9af4):
-  forge (Gemini/Titan :1965, Git SSH :22), forge-secrets (tmpfs), nftables,
-  wg0 mesh (handshakes both ways), replication over the mesh (metadata
-  leader ewr1), BIRD with `vultr4`/`vultr6` Established and both prefixes
-  exported from both nodes. DNS: `<pop>.nodes.as215520.net`,
-  `git.as215520.net` A/AAAA on the anycast addresses, SSHFP.
+- **ewr1** (New Jersey, 64.176.195.46), **ams1** (Amsterdam, 78.141.214.215)
+  and **sgp1** (Singapore, 66.42.49.14), all Vultr `vc2-1c-1gb`: forge
+  (Gemini/Titan :1965, Git SSH :22), forge-secrets (tmpfs), nftables, a
+  full WireGuard mesh, replication from leader ewr1, BIRD announcing both
+  prefixes. DNS: `<pop>.nodes.as215520.net`, `git.as215520.net` on the
+  anycast addresses, SSHFP.
 - Local: `make run` serves gemini://localhost:1965/ and ssh://localhost:2222.
 - **Dogfooding**: this repository is hosted on the forge as `jdb/forge`
   (leader ewr1, replicated to ams1); browse gemini://git.as215520.net/~jdb/forge/.
