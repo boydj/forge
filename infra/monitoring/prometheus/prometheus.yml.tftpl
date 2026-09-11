@@ -13,7 +13,6 @@
 #                               (+ OpenTofu outputs):
 #                                 name          ewr1
 #                                 wg_address    fda5:bc65:9bb1:1::1   (metrics live here)
-#                                 unicast_v6    2a0f:85c1:368:101::1  (from the /48)
 #                                 provider_ipv4 provider address (per-POP unicast v4)
 #                                 provider_ipv6 provider address
 #                               Only POPs with the `forge` role belong here; lab
@@ -89,11 +88,13 @@ scrape_configs:
   #
   # Anycast targets: the probe lands on whichever POP is nearest to the
   # monitoring host, so probe_success on them means "the service is reachable
-  # from here", not "every POP works". Node targets are the per-POP unicast
-  # addresses: provider IPv4/IPv6 (mesh-independent) and the POP's /48 unicast
-  # address (reaches the POP through the anycast catchment plus the WireGuard
-  # backhaul, so it also tests the mesh). Those are the per-node signal.
-  # target_kind: anycast | node; family: v4 | v6; port: 1965 | 22.
+  # from here", not "every POP works". Node targets are each POP's provider
+  # IPv4 and IPv6 addresses: the per-node signal, independent of anycast and
+  # of the mesh. The POP's /48 unicast address is deliberately not probed:
+  # from outside it lands in the nearest catchment and cannot be backhauled
+  # (WireGuard drops third-party sources; the forward chain drops), so it is
+  # an on-net address. The mesh itself is exercised by every forge/node/bird
+  # scrape above. target_kind: anycast | node; family: v4 | v6; port: 1965 | 22.
   - job_name: blackbox_gemini_v4
     metrics_path: /probe
     params: { module: [gemini_v4] }
@@ -121,8 +122,6 @@ scrape_configs:
 %{ for pop in pops ~}
       - targets: ["[${pop.provider_ipv6}]:1965"]
         labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "1965", path: provider }
-      - targets: ["[${pop.unicast_v6}]:1965"]
-        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "1965", path: unicast }
 %{ endfor ~}
     relabel_configs: *blackbox_relabel
 
@@ -147,7 +146,5 @@ scrape_configs:
 %{ for pop in pops ~}
       - targets: ["[${pop.provider_ipv6}]:22"]
         labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "22", path: provider }
-      - targets: ["[${pop.unicast_v6}]:22"]
-        labels: { target_kind: node, pop: "${pop.name}", node: "${pop.name}", family: v6, port: "22", path: unicast }
 %{ endfor ~}
     relabel_configs: *blackbox_relabel

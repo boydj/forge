@@ -121,7 +121,7 @@ http://127.0.0.1:9090 '<expr>'` (or the Prometheus UI):
 | `forge_bgp_announced` | 1 for every POP |
 | `bird_protocol_up{proto="BGP"}` | 1 for `vultr4` and `vultr6` on every POP |
 | `probe_success{target_kind="anycast"}` | 1 for v4 and v6, port 1965 and 22 |
-| `probe_success{target_kind="node"} == 0` | empty (the `unicast` path proves anycast + mesh backhaul) |
+| `probe_success{target_kind="node"} == 0` | empty (provider addresses of every POP, v4 and v6) |
 | `ALERTS{alertstate="firing"}` | empty, or only what you expect |
 
 Grafana: `http://127.0.0.1:3000`, `admin` / `admin`, change the password

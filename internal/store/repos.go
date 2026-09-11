@@ -165,6 +165,15 @@ func (s *Store) CountReposByOwner(ctx context.Context, owner int64) (int, int64,
 	return n, size, err
 }
 
+// RepoTotals counts non-deleted repositories and sums their sizes (the
+// forge_repositories and forge_repository_bytes gauges).
+func (s *Store) RepoTotals(ctx context.Context) (int, int64, error) {
+	var n int
+	var size int64
+	err := s.db.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(size_bytes), 0) FROM repositories WHERE deleted_at IS NULL`).Scan(&n, &size)
+	return n, size, err
+}
+
 func (s *Store) queryRepos(ctx context.Context, q string, args ...any) ([]*Repo, error) {
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {

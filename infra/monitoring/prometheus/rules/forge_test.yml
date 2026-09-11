@@ -249,7 +249,7 @@ tests:
           - exp_labels: { severity: warn, job: blackbox_ssh_v6, instance: "[2001:db8::2]:22", target_kind: node, pop: ams1, node: ams1, family: v6, port: "22", path: provider }
             exp_annotations:
               summary: "ams1 port 22 unreachable over v6 (provider address)"
-              description: "Per-POP probe failing for 5m while the daemon may still report healthy. `path=provider` failing means the node or its firewall; `path=unicast` (the /48 address) failing alone means the WireGuard backhaul from the catching POP is down."
+              description: "Per-POP probe failing for 5m while the daemon may still report healthy. Both address families failing means the node or its firewall; one family alone means that family's provider path."
               runbook: "docs/monitoring.md#reachability"
 
   # NodeHighMemory: 95% used for 10m.

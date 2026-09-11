@@ -248,12 +248,14 @@ class PrometheusTemplate(unittest.TestCase):
         for job, port in (("forge", 9100), ("node", 9101), ("bird", 9324)):
             targets = {(sc["targets"][0], sc["labels"]["pop"], sc["labels"]["node"]) for sc in jobs[job]["static_configs"]}
             self.assertEqual(targets, {(f"[{p['wg_address']}]:{port}", p["name"], p["name"]) for p in POPS}, job)
-        # Probes: the anycast address plus provider (v4/v6) and /48 unicast (v6) per POP.
+        # Probes: the anycast address plus each POP's provider addresses (v4/v6).
+        # The /48 unicast addresses are on-net only and must not be probed.
         v6 = jobs["blackbox_gemini_v6"]["static_configs"]
         kinds = {(sc["labels"]["target_kind"], sc["labels"].get("path"), sc["targets"][0]) for sc in v6}
         self.assertIn(("anycast", None, "[2a0f:85c1:368:1::1]:1965"), kinds)
         self.assertIn(("node", "provider", "[2001:db8:1::10]:1965"), kinds)
-        self.assertIn(("node", "unicast", "[2a0f:85c1:368:101::1]:1965"), kinds)
+        self.assertNotIn("2a0f:85c1:368:101::1", self.rendered)
+        self.assertNotIn("path: unicast", self.rendered)
         v4 = jobs["blackbox_ssh_v4"]["static_configs"]
         self.assertIn("203.0.113.20:22", [sc["targets"][0] for sc in v4])
         self.assertNotIn("null", self.rendered)

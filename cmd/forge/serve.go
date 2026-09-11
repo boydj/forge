@@ -139,6 +139,7 @@ func runServe(args []string) error {
 	}
 
 	go maintenanceLoop(ctx, app, log)
+	go statsLoop(ctx, cfg, app, reg, log)
 	hctx, hcancel := context.WithCancel(context.Background())
 	hwDone := make(chan struct{})
 	go func() { defer close(hwDone); hw.Run(hctx) }()
@@ -288,6 +289,42 @@ func maintenanceLoop(ctx context.Context, app *forge.Forge, log *slog.Logger) {
 			if err := app.Store.PurgeTokens(ctx); err != nil {
 				log.Error("purge tokens", "err", err)
 			}
+		}
+	}
+}
+
+// statsLoop refreshes the storage gauges once a minute: free bytes on the
+// data filesystem, repository count and bytes, accounts, and the age of the
+// newest backup (forge-backup writes <data_dir>/backup.stamp on success; no
+// stamp leaves the gauge at 0, which never alerts).
+func statsLoop(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *metrics.Registry, log *slog.Logger) {
+	refresh := func() {
+		var st syscall.Statfs_t
+		if err := syscall.Statfs(cfg.DataDir, &st); err == nil {
+			reg.DiskFree.Set(float64(st.Bavail) * float64(st.Bsize))
+		} else {
+			log.Warn("statfs data_dir", "err", err)
+		}
+		if n, size, err := app.Store.RepoTotals(ctx); err == nil {
+			reg.RepoCount.Set(float64(n))
+			reg.RepoBytes.Set(float64(size))
+		}
+		if n, err := app.Store.CountUsers(ctx); err == nil {
+			reg.UserCount.Set(float64(n))
+		}
+		if fi, err := os.Stat(filepath.Join(cfg.DataDir, "backup.stamp")); err == nil {
+			reg.BackupAge.Set(time.Since(fi.ModTime()).Seconds())
+		}
+	}
+	refresh()
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			refresh()
 		}
 	}
 }

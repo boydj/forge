@@ -241,7 +241,7 @@ groups:
         labels: { severity: warn }
         annotations:
           summary: "{{ $labels.node }} port {{ $labels.port }} unreachable over {{ $labels.family }} ({{ $labels.path }} address)"
-          description: "Per-POP probe failing for 5m while the daemon may still report healthy. `path=provider` failing means the node or its firewall; `path=unicast` (the /48 address) failing alone means the WireGuard backhaul from the catching POP is down."
+          description: "Per-POP probe failing for 5m while the daemon may still report healthy. Both address families failing means the node or its firewall; one family alone means that family's provider path."
           runbook: "docs/monitoring.md#reachability"
 
   - name: node

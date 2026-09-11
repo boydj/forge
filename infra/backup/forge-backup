@@ -61,3 +61,10 @@ if [ -n "$OFFSITE_CMD" ]; then
   # shellcheck disable=SC2086
   $OFFSITE_CMD "$final"
 fi
+
+# Success stamp: the daemon reports its age as forge_backup_age_seconds
+# (BackupStale fires after 36 h without a new one).
+DATA_DIR=${DATA_DIR:-/var/lib/forge}
+if [ -d "$DATA_DIR" ]; then
+  date -u +%Y-%m-%dT%H:%M:%SZ > "$DATA_DIR/backup.stamp.tmp" && chmod 0644 "$DATA_DIR/backup.stamp.tmp" && mv -f "$DATA_DIR/backup.stamp.tmp" "$DATA_DIR/backup.stamp"
+fi

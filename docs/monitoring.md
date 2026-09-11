@@ -75,9 +75,11 @@ From `internal/metrics/metrics.go` (also listed in `docs/operations.md`):
 | `forge_backup_age_seconds` (gauge) | | `BackupStale` |
 | `forge_hook_decisions_total` (counter) | `hook`, `decision` | `HookDenialsSpike` |
 
-Two of these are registered but not yet populated: `forge_backup_age_seconds`
-reads 0 (a plain gauge exports 0 from registration, so `BackupStale` cannot
-fire until the backup job sets it) and `forge_hook_decisions_total` has no
+The storage gauges (`forge_disk_free_bytes`, `forge_repositories`,
+`forge_repository_bytes`, `forge_users`) are refreshed once a minute by the
+daemon's stats loop; `forge_backup_age_seconds` is the age of
+`<data_dir>/backup.stamp`, which `forge-backup` writes after a successful
+run (no stamp: 0, which never alerts). `forge_hook_decisions_total` has no
 series until the hooks record decisions (the `decision` values are not
 final; the rule treats anything other than `allow|accept|ok` as a denial).
 
@@ -134,9 +136,12 @@ monitor as a mesh member only: it gets a `wg0.conf` and every production
 POP gets it as a peer on its mesh `/128`, but it has no BIRD config, no
 anycast or `/48` unicast address, no `bgp-announce`, and
 `mon1.nodes.<zone>` points at its provider addresses. The monitor's own
-peers are the POPs' mesh `/128`s **without** their unicast `/64`s, so a
-probe of a POP's `/48` address leaves through the public interface and
-proves the anycast catchment plus the mesh backhaul, which is the point.
+peers are the POPs' mesh `/128`s only. A POP's `/48` unicast address is
+not probed: from outside it lands in the nearest catchment and cannot be
+backhauled over the mesh (WireGuard drops packets whose source is not in
+the sending peer's allowed set, and the POP forward chain drops), so those
+addresses are on-net only. Per-node reachability from the internet is the
+provider-address probes; the mesh is exercised by every scrape.
 
 | Piece | What it does |
 | --- | --- |
