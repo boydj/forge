@@ -18,19 +18,23 @@ Authoritative sources checked (2026-09-10): RIPE DB REST
 (`rest.db.ripe.net/ripe/{aut-num,as-set,route6,inet6num}`), RADB
 (`whois.radb.net`), ARIN RDAP.
 
-## Submitting from the repository
+## Submitting from the repository (canonical: OpenTofu)
 
-With a Database API key in the bundle (`scripts/secrets edit
-infra/secrets/dev.enc.yaml`, key `ripe_db_api_key: "KEYID:SECRET"`):
+`infra/opentofu/environments/ripe` manages both objects with the
+`frederic-arr/ripedb` provider, parsing these `.rpsl` files as the single
+source of truth. With a Database API key in the bundle (`scripts/secrets
+edit infra/secrets/dev.enc.yaml`, key `ripe_db_api_key: "KEYID:SECRET"`):
 
 ```
-scripts/ripe-submit diff  infra/network/irr/as-set-AS215520-AS-ALL.rpsl infra/network/irr/aut-num-AS215520.rpsl   # live vs template
-scripts/ripe-submit check infra/network/irr/as-set-AS215520-AS-ALL.rpsl infra/network/irr/aut-num-AS215520.rpsl   # REST dry run
-scripts/ripe-submit apply infra/network/irr/as-set-AS215520-AS-ALL.rpsl infra/network/irr/aut-num-AS215520.rpsl   # for real
-scripts/netcheck                                                                                                # verify
+eval "$(scripts/secrets env infra/secrets/dev.enc.yaml)"
+tofu -chdir=infra/opentofu/environments/ripe plan                      # dry run against the RIPE DB, nothing written
+tofu -chdir=infra/opentofu/environments/ripe apply -var dry_run=false  # writes as-set then aut-num
+scripts/netcheck                                                       # irr rows turn OK
 ```
 
-Create the as-set before the aut-num update: the aut-num exports reference it.
+`scripts/ripe-submit diff <file.rpsl>` shows the live object against a
+template without a key (read-only); its `check`/`apply` verbs are a
+fallback for a machine without OpenTofu.
 
 ## How to submit to the RIPE DB (by hand)
 

@@ -105,8 +105,10 @@ Remaining operator actions:
    in `dev.auto.tfvars`, `scripts/deploy ewr1`; the health controller
    announces once checks pass; verify with `scripts/netcheck --expect announced`
    and withdraw the AS835 (Toronto) announcement of the /48 afterwards.
-2. RIPE objects (`infra/network/irr/`): aut-num update and `AS215520:AS-ALL`
-   via Webupdates (SSO); see the reply of 2026-09-11 and `infra/network/irr/README.md`.
+2. RIPE objects: put the Database API key in the bundle
+   (`scripts/secrets edit infra/secrets/dev.enc.yaml`, `ripe_db_api_key`),
+   then `tofu -chdir=infra/opentofu/environments/ripe plan` (dry run) and
+   `apply -var dry_run=false`; the aut-num is already imported into state.
 3. Reverse DNS delegation for both prefixes (Inferno `domain` object; ARDC portal NS records).
 4. Publish the DS record at Namecheap; fill PeeringDB (`infra/network/peeringdb/desired.yaml`).
 5. Register the first account (it becomes administrator): open
