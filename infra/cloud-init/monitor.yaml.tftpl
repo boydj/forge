@@ -1,0 +1,135 @@
+#cloud-config
+# forge monitor host (mon1) bootstrap for Debian 13 (trixie). Rendered by
+# modules/monitor-node (templatefile) and passed as user_data to
+# modules/vultr-monitor. It creates the users, installs Prometheus and the
+# blackbox exporter from Debian only, moves OpenSSH to port ${admin_ssh_port},
+# writes the firewall and the exporters' argument files, and enables the
+# units. Everything monitoring-specific (prometheus.yml rendered from the POP
+# list, the alert rules, blackbox.yml, Grafana from its pinned upstream apt
+# repository, the dashboard, and the WireGuard config with its key) is pushed
+# afterwards by `scripts/deploy monitor <name>` as root, so this file stays
+# small and a fresh boot needs nothing from outside Debian.
+#
+# There is no forge daemon, no BIRD, no anycast address and no secret bundle
+# here: the only secret the host ever holds is its WireGuard private key
+# (/etc/wireguard/wg0.conf, 0600 root), see docs/monitoring.md.
+hostname: ${node}
+fqdn: ${hostname_fqdn}
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: true
+timezone: Etc/UTC
+locale: C.UTF-8
+
+package_update: true
+package_upgrade: true
+package_reboot_if_required: false
+packages:
+  - prometheus                  # 2.53 LTS in trixie; config/rules under /etc/prometheus
+  - promtool                    # `promtool check config` on the host before a reload
+  - prometheus-blackbox-exporter
+  - wireguard-tools             # wg-quick@wg0; config pushed by scripts/deploy monitor
+  - nftables
+  - curl
+  - ca-certificates
+  - gnupg                       # verifies the pinned Grafana apt key (scripts/deploy monitor)
+  - unattended-upgrades
+
+# OpenSSH: no passwords anywhere. root keeps the provider-injected bootstrap
+# key (prohibit-password) and is what `scripts/deploy monitor` logs in as;
+# `deploy` is a plain account for `ssh -L` tunnels to Grafana/Prometheus.
+ssh_pwauth: false
+disable_root: false
+ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]
+users:
+  - name: deploy
+    gecos: forge operator tunnel user (no sudo on the monitor)
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+${operator_ssh_authorized_keys}
+
+write_files:
+  # --- OpenSSH on the admin port. Unlike a POP, local port forwarding is
+  # allowed, restricted to the two loopback UIs (docs/monitoring.md).
+  - path: /etc/ssh/sshd_config.d/10-forge.conf
+    permissions: "0644"
+    content: |
+      Port ${admin_ssh_port}
+      AddressFamily any
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PermitRootLogin prohibit-password
+      PubkeyAuthentication yes
+      AllowUsers root deploy
+      X11Forwarding no
+      AllowAgentForwarding no
+      AllowTcpForwarding local
+      PermitOpen 127.0.0.1:3000 127.0.0.1:9090 127.0.0.1:9115
+      ClientAliveInterval 60
+      ClientAliveCountMax 3
+      LoginGraceTime 20
+      MaxAuthTries 4
+
+  # --- Firewall (nftables package ships a default /etc/nftables.conf: defer).
+  - path: /etc/nftables.conf
+    permissions: "0755"
+    defer: true
+    content: |
+      ${indent(6, nftables_conf)}
+
+  # --- Exporter arguments (package conffiles: defer). Debian patches the
+  # config and storage paths into the binaries, so ARGS only adds flags.
+  # Prometheus listens on [::] so the mesh (IPv6-only) can reach it; nftables
+  # admits 9090 from loopback and wg0 only. 90 days / 15 GB is well inside the
+  # 25 GB disk at this cardinality (docs/monitoring.md).
+  - path: /etc/default/prometheus
+    permissions: "0644"
+    defer: true
+    content: |
+      ARGS="--web.listen-address=[::]:9090 --storage.tsdb.retention.time=90d --storage.tsdb.retention.size=15GB"
+  - path: /etc/default/prometheus-blackbox-exporter
+    permissions: "0644"
+    defer: true
+    content: |
+      ARGS="--config.file /etc/prometheus/blackbox.yml --web.listen-address 127.0.0.1:9115"
+
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+  - path: /etc/forge/node.env
+    permissions: "0644"
+    content: |
+      # facts scripts/deploy and the node itself may consult
+      FORGE_NODE=${node}
+      FORGE_ROLE=monitor
+      FORGE_POP_INDEX=${pop_index}
+      FORGE_SERVICE_HOSTNAME=${service_hostname}
+
+runcmd:
+  # directories scripts/deploy monitor writes into (Grafana's are created at
+  # install time by the same command)
+  - [install, -d, -m, "0755", /etc/prometheus/rules, /etc/forge]
+  # OpenSSH to the admin port (handle socket-activated images too)
+  - [sh, -c, "systemctl is-enabled ssh.socket >/dev/null 2>&1 && systemctl disable --now ssh.socket || true"]
+  - [sh, -c, "sshd -t && systemctl restart ssh"]
+  # firewall: check then enable
+  - [sh, -c, "nft -c -f /etc/nftables.conf && systemctl enable --now nftables && nft -f /etc/nftables.conf"]
+  # wg0 waits for its config (scripts/deploy monitor); the exporters start
+  # now with Debian's defaults and are restarted so the ARGS above apply.
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, wg-quick@wg0.service]
+  - [systemctl, enable, --now, prometheus, prometheus-blackbox-exporter, unattended-upgrades]
+  - [systemctl, restart, prometheus, prometheus-blackbox-exporter]
+  # Console lines for the operator: the sshd host key for
+  # `scripts/deploy monitor ${node} --hostkey-fingerprint` (SR-19b).
+  - [sh, -c, "echo \"forge monitor ${node} (${hostname_fqdn}) bootstrapped; admin ssh :${admin_ssh_port}\" | tee /dev/console"]
+  - [sh, -c, "echo \"known_hosts: [${hostname_fqdn}]:${admin_ssh_port} $(cut -d' ' -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)\" | tee /dev/console"]
+  - [sh, -c, "echo \"hostkey fingerprint: $(ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub | cut -d' ' -f2)\" | tee /dev/console"]
+
+final_message: "forge monitor ${node} ready after $UPTIME s (cloud-init $VERSION); next: scripts/deploy monitor ${node} --hostkey-fingerprint SHA256:..."

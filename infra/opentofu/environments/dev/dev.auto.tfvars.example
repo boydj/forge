@@ -46,3 +46,14 @@ pops = {
     bgp_announce     = false
   }
 }
+
+# --- Monitoring host (address-plan.yaml roles [monitor]; docs/monitoring.md).
+# A region with no POP, so its anycast probes cross real transit paths.
+monitors = {
+  mon1 = {
+    region     = "ord"
+    index      = 250
+    wg_address = "fda5:bc65:9bb1:1::fa/64" # pops[mon1].wg_address + mesh prefix length
+    # alertmanager_targets = ["127.0.0.1:9093"]   # once an alert destination exists
+  }
+}

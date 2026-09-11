@@ -15,6 +15,10 @@
 #   deploy drain <pop> | undrain <pop>            withdraw/announce via bgp-announce on the node
 #   deploy status <pop>                           unit states, wg0, bird, last forge log lines
 #   deploy smoke <pop>                            Gemini + SSH banner checks only
+#   deploy monitor <mon> [--host root@host] [--config-dir DIR] [--hostkey-fingerprint F | --known-hosts-line L]
+#                                                 as root: Grafana from its pinned apt repo, prometheus.yml (tofu output
+#                                                 monitor_configs), rules, blackbox.yml, dashboard, wg0.conf (+ key),
+#                                                 nftables.conf; reload/restart the units (docs/monitoring.md)
 #
 # Environment: FORGE_SSH_IDENTITY (private key for the deploy user),
 # FORGE_ENV (dev), FORGE_ZONE (as215520.net), FORGE_ADMIN_PORT
@@ -269,6 +273,10 @@ push_system_files() { # push_system_files <root@host>
   done
   root_file "$t" "$ROOT/infra/backup/forge-backup" /usr/local/bin/forge-backup 0755
   root_file "$t" "$ROOT/scripts/bgp-announce" /usr/local/bin/bgp-announce 0755
+  # bird_exporter (docs/monitoring.md): the package plus our unit of the same
+  # name, which shadows the packaged one. Nodes built before it was in
+  # cloud-init get the package here.
+  root_file "$t" "$ROOT/infra/monitoring/bird-exporter.service" /etc/systemd/system/prometheus-bird-exporter.service 0644
   rscript "$t" <<'EOT'
 set -e
 printf 'deploy ALL=(root) NOPASSWD: /usr/local/sbin/forge-deploy-helper *\n' > /etc/sudoers.d/deploy.tmp
@@ -276,11 +284,136 @@ chmod 0440 /etc/sudoers.d/deploy.tmp && mv -f /etc/sudoers.d/deploy.tmp /etc/sud
 # nodes built before SR-19a: drop cloud-init's blanket rule
 [ -f /etc/sudoers.d/90-cloud-init-users ] && sed -i '/^deploy .*NOPASSWD:ALL/d' /etc/sudoers.d/90-cloud-init-users || true
 visudo -c >/dev/null
+if ! dpkg -s prometheus-bird-exporter >/dev/null 2>&1; then
+  DEBIAN_FRONTEND=noninteractive apt-get install -qq -y prometheus-bird-exporter >/dev/null && echo "installed prometheus-bird-exporter"
+fi
 systemctl daemon-reload
 systemctl enable forge-secrets.service >/dev/null 2>&1 || true
 systemctl enable --now forge-bgp.path >/dev/null 2>&1 || true
-echo "system files installed; run: scripts/deploy <pop>"
+systemctl enable --now prometheus-bird-exporter >/dev/null 2>&1 || echo "prometheus-bird-exporter not started (no bird here?)"
+echo "system files installed; run: scripts/deploy <pop>   (refreshes nftables.conf: 9324 on wg0)"
 EOT
+}
+
+# --- monitor host ---------------------------------------------------------------------
+# The monitoring host (docs/monitoring.md) runs no forge, has no deploy helper
+# and no secret bundle: everything is installed as root over the bootstrap
+# key, the way sysupdate/bootstrap work for a POP. Its only secret is its
+# WireGuard private key, rendered into wg0.conf here and shipped 0600 root.
+GRAFANA_CONF="$ROOT/infra/monitoring/grafana/apt-repo.conf"
+
+render_monitor_configs() { # render_monitor_configs <mon> <dir>: prometheus.yml + nftables.conf (tofu output or --config-dir), wg0.conf (+ key), repo files
+  local mon=$1 dir=$2 key
+  if [ -n "$CONFIG_DIR" ]; then
+    cp "$CONFIG_DIR"/prometheus.yml "$CONFIG_DIR"/nftables.conf "$dir"/ 2>/dev/null || true
+  elif command -v tofu >/dev/null 2>&1 && [ -d "$TOFU_DIR" ] && [ -e "$TOFU_DIR/terraform.tfstate" ]; then
+    # Output is a map keyed by monitor name: { mon1 = { prometheus_yml, nftables_conf } }.
+    for key in prometheus_yml:prometheus.yml nftables_conf:nftables.conf; do
+      tofu -chdir="$TOFU_DIR" output -json monitor_configs 2>/dev/null \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); v=(d.get(sys.argv[1]) or {}).get(sys.argv[2]); sys.stdout.write(v) if v else sys.exit(1)' "$mon" "${key%%:*}" \
+        > "$dir/${key#*:}" || rm -f "$dir/${key#*:}"
+    done
+  fi
+  if [ ! -s "$dir/prometheus.yml" ]; then
+    [ "$DRY" = 1 ] || die "no rendered prometheus.yml for $mon (tofu output monitor_configs needs state with monitors = { $mon = ... }; or pass --config-dir)"
+    log "(dry run) no rendered prometheus.yml; using a placeholder"; echo "# dry-run placeholder" > "$dir/prometheus.yml"
+  fi
+  [ -s "$dir/nftables.conf" ] || log "no rendered nftables.conf; keeping the host's current one"
+  # WireGuard: netgen's config with the private key filled in from SOPS.
+  local wg="$ROOT/infra/wireguard/generated/$mon/wg0.conf"
+  if [ -s "$wg" ] && [ -s "$BUNDLE" ]; then
+    key=$("$ROOT/scripts/secrets" get "$BUNDLE" "wireguard_private_keys.$mon" 2>/dev/null || true)
+    if [ -n "$key" ] && [ "${key#REPLACE}" = "$key" ]; then
+      (umask 077; WG_KEY="$key" python3 -c 'import os,sys; sys.stdout.write(open(sys.argv[1]).read().replace("__WG_PRIVATE_KEY__", os.environ["WG_KEY"]))' "$wg" > "$dir/wg0.conf")
+      if grep -q '__[A-Z0-9_]*__' "$dir/wg0.conf"; then log "WARNING: wg0.conf still has placeholders; not shipping it"; rm -f "$dir/wg0.conf"; fi
+    else
+      log "WARNING: no wireguard_private_keys.$mon in ${BUNDLE#$ROOT/} (scripts/secrets gen-wg $mon); wg0.conf not shipped"
+    fi
+  else
+    log "no ${wg#$ROOT/} or no secret bundle; wg0.conf not shipped"
+  fi
+  # Everything else is a plain repository file (rules next to the config so
+  # `promtool check config` resolves rule_files: rules/*.yml).
+  mkdir -p "$dir/rules"
+  cp "$ROOT"/infra/monitoring/prometheus/rules/forge.yml "$dir/rules/"
+  cp "$ROOT/infra/monitoring/blackbox.yml" "$dir/"
+}
+
+check_monitor_configs() { # check_monitor_configs <dir>: local promtool/nft when installed; the host re-checks before applying
+  local dir=$1
+  if command -v promtool >/dev/null 2>&1 && [ "$DRY" != 1 ]; then
+    (cd "$dir" && promtool check config prometheus.yml >/dev/null) || die "promtool rejected prometheus.yml"
+    promtool check rules "$dir/rules/forge.yml" >/dev/null || die "promtool rejected rules/forge.yml"
+    log "promtool: prometheus.yml and rules OK"
+  else
+    log "promtool not run locally; the host checks before reloading"
+  fi
+  if command -v nft >/dev/null 2>&1 && [ -s "$dir/nftables.conf" ]; then
+    nft -c -f "$dir/nftables.conf" || die "nft rejected nftables.conf"
+  fi
+}
+
+push_monitor_files() { # push_monitor_files <root@host> <dir>
+  local t=$1 dir=$2
+  # shellcheck source=../infra/monitoring/grafana/apt-repo.conf
+  . "$GRAFANA_CONF"
+  log "preparing directories and Grafana (apt key pinned to $GRAFANA_APT_KEY_FPR) as root"
+  rscript "$t" "$GRAFANA_APT_KEY_URL" "$GRAFANA_APT_KEY_FPR" "$GRAFANA_APT_REPO" "$GRAFANA_APT_PACKAGE" <<'EOT'
+set -e; url=$1; fpr=$2; repo=$3; pkg=$4
+export DEBIAN_FRONTEND=noninteractive
+install -d -m 0755 /etc/prometheus/rules /etc/apt/keyrings /etc/systemd/system/grafana-server.service.d
+if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+  command -v gpg >/dev/null 2>&1 || apt-get install -qq -y gnupg >/dev/null
+  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  curl -fsS --max-time 30 "$url" -o "$tmp/key.asc"
+  got=$(gpg --with-colons --import-options show-only --import "$tmp/key.asc" 2>/dev/null | awk -F: '/^fpr/{print $10; exit}')
+  [ "$got" = "$fpr" ] || { echo "grafana apt key fingerprint $got does not match the pinned $fpr; not installing" >&2; exit 1; }
+  gpg --dearmor < "$tmp/key.asc" > /etc/apt/keyrings/grafana.gpg && chmod 0644 /etc/apt/keyrings/grafana.gpg
+  printf '%s\n' "$repo" > /etc/apt/sources.list.d/grafana.list
+  apt-get update -qq && apt-get install -qq -y "$pkg" >/dev/null
+  echo "installed $pkg"
+fi
+install -d -m 0755 /etc/grafana/provisioning/datasources /etc/grafana/provisioning/dashboards
+install -d -m 0755 -o grafana -g grafana /var/lib/grafana/dashboards
+EOT
+  log "installing prometheus.yml, rules, blackbox.yml, Grafana provisioning + dashboard, nftables.conf, wg0.conf as root"
+  root_file "$t" "$dir/prometheus.yml" /etc/prometheus/prometheus.yml 0644
+  root_file "$t" "$dir/rules/forge.yml" /etc/prometheus/rules/forge.yml 0644
+  root_file "$t" "$dir/blackbox.yml" /etc/prometheus/blackbox.yml 0644
+  root_file "$t" "$ROOT/infra/monitoring/grafana/provisioning/datasources/prometheus.yml" /etc/grafana/provisioning/datasources/prometheus.yml 0644
+  root_file "$t" "$ROOT/infra/monitoring/grafana/provisioning/dashboards/forge.yml" /etc/grafana/provisioning/dashboards/forge.yml 0644
+  root_file "$t" "$ROOT/infra/monitoring/grafana/forge-overview.json" /var/lib/grafana/dashboards/forge-overview.json 0644
+  root_file "$t" "$ROOT/infra/monitoring/grafana/grafana-server.override.conf" /etc/systemd/system/grafana-server.service.d/forge.conf 0644
+  if [ -s "$dir/nftables.conf" ]; then root_file "$t" "$dir/nftables.conf" /etc/nftables.conf 0755; fi
+  if [ -s "$dir/wg0.conf" ]; then root_file "$t" "$dir/wg0.conf" /etc/wireguard/wg0.conf 0600; fi
+  log "applying: nftables, wg0, prometheus (reload), blackbox, grafana"
+  rscript "$t" <<'EOT'
+set -e
+promtool check config /etc/prometheus/prometheus.yml >/dev/null
+if [ -s /etc/nftables.conf ]; then nft -c -f /etc/nftables.conf && systemctl reload-or-restart nftables; fi
+systemctl daemon-reload
+if [ -s /etc/wireguard/wg0.conf ]; then systemctl enable wg-quick@wg0 >/dev/null 2>&1 || true; systemctl restart wg-quick@wg0; fi
+systemctl restart prometheus-blackbox-exporter
+systemctl reload-or-restart prometheus
+systemctl enable grafana-server >/dev/null 2>&1 || true
+systemctl restart grafana-server
+sleep 3
+for u in nftables wg-quick@wg0 prometheus prometheus-blackbox-exporter grafana-server; do printf '%-32s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"; done
+curl -fsS -o /dev/null -w 'prometheus /-/ready: %{http_code}\n' http://127.0.0.1:9090/-/ready || echo "prometheus not ready yet"
+wg show wg0 2>/dev/null | grep -E '^peer|handshake' || echo "wg0: no peers or handshakes yet (peers need this host in infra/network/overrides.yaml)"
+EOT
+}
+
+cmd_monitor() {
+  local mon=$1; shift; parse_opts "$@"
+  local t h; t=$(root_target "$mon"); h=$(host_only "$t")
+  if [ -n "$KH_LINE$KH_FP" ]; then pin_hostkey "$h"; else require_pinned "$h"; fi
+  local tmp="$TMP/monitor-$mon"; install -d -m 0700 "$tmp"
+  [ "$DRY" = 1 ] && log "DRY RUN for monitor $mon ($t)"
+  render_monitor_configs "$mon" "$tmp"
+  check_monitor_configs "$tmp"
+  push_monitor_files "$t" "$tmp"
+  log "deployed monitor $mon; Grafana/Prometheus: ssh -N -L 3000:127.0.0.1:3000 -L 9090:127.0.0.1:9090 -p $PORT deploy@$h"
 }
 
 # --- commands -----------------------------------------------------------------------
@@ -393,6 +526,7 @@ main() {
     drain|undrain) a=$1; shift; [ $# -ge 1 ] || usage 1; cmd_announce "$a" "$@";;
     status) shift; [ $# -ge 1 ] || usage 1; cmd_status "$@";;
     smoke) shift; [ $# -ge 1 ] || usage 1; pop=$1; shift; parse_opts "$@"; smoke "$pop";;
+    monitor) shift; [ $# -ge 1 ] || usage 1; cmd_monitor "$@";;
     -*) usage 1;;
     *) cmd_deploy "$@";;
   esac
