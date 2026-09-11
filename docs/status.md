@@ -1,6 +1,6 @@
 # Project status
 
-Updated: 2026-09-10 (evening)
+Updated: 2026-09-11
 
 ## Current milestone
 
@@ -8,9 +8,14 @@ Updated: 2026-09-10 (evening)
 AS20473 as anycast: ewr1 (New Jersey), ams1 (Amsterdam), sgp1 (Singapore),
 joined by a WireGuard mesh and replicating from metadata leader ewr1. The
 forge hosts its own source (jdb/forge, replicated to all three); jdb is the
-administrator. M9 (a second provider, for provider diversity) is next.** Hardening (security review, failure
-injection, load, interop), M11 Mercurial prototype and M6 desired state are
-done.
+administrator.** M9 (a second provider) was evaluated and deferred: none of
+the 29 North America BGP VPS providers is fully code-driven
+(`docs/research/na-bgp-providers.md`), so Vultr stays the sole upstream.
+Current work: the documentation site (`/docs/`, done), the fleet status
+page (`/status/`, done), the monitoring host `mon1` (in progress) and git
+push forwarding from replicas to the leader (in progress). Hardening
+(security review, failure injection, load, interop), M11 Mercurial
+prototype and M6 desired state are done.
 
 ## Accomplished
 
@@ -44,6 +49,15 @@ done.
   15 runbooks, release tooling, dependency review.
 - M11: `internal/vcs/hg` Mercurial adapter prototype (read paths, patches;
   merges unsupported), `docs/mercurial.md`.
+- Documentation site: `/docs/` serves the `docs/` directory of the
+  dogfooded repository (`docs.repo`), rendered at its default branch;
+  `docs/README.md` is the index. A git push is a docs deploy.
+- Status page: `/status/` renders the fleet from the control plane
+  (health verdict, announcement state, per-check results, replication lag,
+  uptime per POP; component and anycast summary; banner) plus the newest
+  incident reports from `docs/incidents/`, also served as `/status/feed`
+  (gemfeed) and `/status/atom.xml`. No monitoring host needed.
+- Provider evaluation (M9): `docs/research/na-bgp-providers.md`.
 - M6 prep: IRR/RPKI/PeeringDB desired state, Vultr LOA and BGP checklist,
   `scripts/netcheck` drift checker, `docs/runbooks/network-bootstrap.md`.
 - Network: `infra/network/address-plan.yaml`, `scripts/netgen` (BIRD, WireGuard, DNS, nftables outputs), `scripts/bgp-announce`, BIRD configs validated with `bird -p` 2.14.
@@ -119,11 +133,23 @@ Remaining operator actions:
 
 ## Next executable work
 
-1. M9: second provider module (`infra/opentofu/modules/<provider>-pop`) with the same outputs as vultr-pop; candidates in `docs/research/vultr.md` section 11.
-2. IPv4 /24 anycast reachability is uneven from some networks (no ROA possible, ADR 0013; observed a Cogent/Marseille detour). The IPv6 /48 anycast is clean. Monitor and consider a covering-route or upstream fix.
-3. Git push over anycast can hit a replica (rejected with the leader name); automatic push forwarding is future work.
-2. M6: RIPE objects, rDNS, DS, PeeringDB (operator).
-3. Backup verification on ewr1 (`forge-backup.timer` runs nightly; check `/var/backups/forge`).
-4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).
-5. Dogfooding once M4 is live and backups verified (`docs/dogfooding.md`).
-6. Pushed to `origin` (github.com/boydj/forge) on 2026-09-10; GitHub Actions runs `.github/workflows/ci.yml` on every push.
+1. Deploy the documentation site and status page to the three POPs
+   (`docs/runbooks/upgrade-and-rollback.md`), after `tofu apply` in
+   `infra/opentofu/environments/dev` refreshes the rendered `forge.toml`
+   outputs (the `[docs]` block; outputs only, no resource change).
+2. Monitoring host `mon1` (`docs/monitoring.md`, runbook
+   `deploy-monitor.md` once merged): one `vc2-1c-1gb` in a region without a
+   POP, mesh member, Prometheus + blackbox + Grafana; bird_exporter and port
+   9324 on the POPs via `deploy sysupdate`. Alert destination still to be
+   chosen (alerts visible in the Prometheus UI until then).
+3. Git push forwarding: a push landing on a replica is relayed to the
+   leader over the control plane (in progress).
+4. IPv4 /24 anycast reachability is uneven from some networks (no ROA
+   possible, ADR 0013; observed a Cogent/Marseille detour). The IPv6 /48
+   anycast is clean; mon1's blackbox probes will quantify it.
+5. M6 leftovers (operator): rDNS delegation, DS record, PeeringDB; the
+   `as215520.net`/`www` AAAA still points at the retired Toronto box.
+6. Backup verification on ewr1 (`forge-backup.timer` runs nightly; check `/var/backups/forge`).
+7. M9 revisit only if provider diversity becomes mandatory: Xenyth Cloud
+   (Toronto) is the closest candidate, with a one-time API-key ticket and a
+   panel-ordered BGP session.

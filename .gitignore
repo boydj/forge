@@ -33,3 +33,6 @@ crash.log
 node_modules/
 .known_hosts
 __pycache__/
+
+# Claude Code fork worktrees (tool-local)
+.claude/worktrees/
