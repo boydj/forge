@@ -37,6 +37,16 @@ type recAnn struct {
 	fail  map[string]error
 }
 
+// stateAnn is an announcer that also reports its current state (like the
+// production forge-bgp-request script).
+type stateAnn struct {
+	recAnn
+	state State
+	err   error
+}
+
+func (s *stateAnn) State(context.Context) (State, error) { return s.state, s.err }
+
 func (r *recAnn) do(verb string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -462,5 +472,36 @@ func TestConfigDefaultsAndClamps(t *testing.T) {
 		if s.String() == "" {
 			t.Fatal("empty state name")
 		}
+	}
+}
+
+func TestStartupAdoptsAnnouncedState(t *testing.T) {
+	h := newHarness(t, Config{})
+	ann := &stateAnn{state: StateAnnounced}
+	h.c = New(h.cfg, []Check{{Name: "probe", Run: func(context.Context) error { return nil }}}, ann).SetClock(h.clk.Now).SetLogger(quietLogger())
+	h.c.reconcile(context.Background())
+	if h.c.State() != StateAnnounced {
+		t.Fatalf("state after adoption: %s", h.c.State())
+	}
+	if len(ann.calls) != 0 {
+		t.Fatalf("adoption must not call the announcer, got %v", ann.calls)
+	}
+	// Healthy ticks keep it announced without any transition.
+	for i := 0; i < 3; i++ {
+		h.clk.Advance(h.cfg.Interval)
+		h.c.Tick(context.Background())
+	}
+	if h.c.State() != StateAnnounced || len(ann.calls) != 0 {
+		t.Fatalf("state %s calls %v", h.c.State(), ann.calls)
+	}
+}
+
+func TestStartupWithdrawsWhenStateUnknown(t *testing.T) {
+	h := newHarness(t, Config{})
+	ann := &stateAnn{err: errors.New("no answer")}
+	h.c = New(h.cfg, []Check{{Name: "probe", Run: func(context.Context) error { return nil }}}, ann).SetClock(h.clk.Now).SetLogger(quietLogger())
+	h.c.reconcile(context.Background())
+	if h.c.State() != StateWithdrawn || len(ann.calls) != 1 || ann.calls[0] != "withdraw" {
+		t.Fatalf("state %s calls %v", h.c.State(), ann.calls)
 	}
 }

@@ -166,8 +166,13 @@ render_configs() { # render_configs <pop> <dir>: forge.toml + nftables.conf from
   local pop=$1 dir=$2
   if [ -n "$CONFIG_DIR" ]; then cp "$CONFIG_DIR"/forge.toml "$CONFIG_DIR"/nftables.conf "$dir"/ 2>/dev/null || true; return 0; fi
   if command -v tofu >/dev/null 2>&1 && [ -d "$TOFU_DIR" ] && [ -e "$TOFU_DIR/terraform.tfstate" ]; then
-    tofu -chdir="$TOFU_DIR" output -raw forge_toml > "$dir/forge.toml" 2>/dev/null || rm -f "$dir/forge.toml"
-    tofu -chdir="$TOFU_DIR" output -raw nftables_conf > "$dir/nftables.conf" 2>/dev/null || rm -f "$dir/nftables.conf"
+    # Outputs are maps keyed by POP name.
+    local out
+    for out in forge_toml:forge.toml nftables_conf:nftables.conf; do
+      tofu -chdir="$TOFU_DIR" output -json "${out%%:*}" 2>/dev/null \
+        | python3 -c 'import json,sys; d=json.load(sys.stdin); v=d.get(sys.argv[1]); sys.stdout.write(v) if v else sys.exit(1)' "$pop" \
+        > "$dir/${out#*:}" || rm -f "$dir/${out#*:}"
+    done
   fi
   [ -s "$dir/forge.toml" ] || log "no rendered forge.toml (no tofu state / --config-dir); keeping the node's current one"
 }

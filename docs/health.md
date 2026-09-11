@@ -315,3 +315,14 @@ compromised forge process can therefore only choose among the four verbs;
 it cannot write BIRD configuration. `forge-bgp-request status` prints the
 last result. Both files are installed by cloud-init and refreshed by
 `scripts/deploy sysupdate`.
+
+## Restarts and deploys
+
+At startup the controller asks the announcer for the node's current state
+(`forge-bgp-request state`, derived from `bgp-announce status`) and adopts
+it: a node that was announcing keeps announcing across a restart or a
+`scripts/deploy`, and the normal checks take over from there. Only when the
+state cannot be determined does it withdraw first and re-announce after the
+recovery threshold. A graceful stop drains, so the next instance typically
+adopts "drained" and undrains after the recovery threshold and cooldown;
+traffic keeps flowing (prepended) throughout.

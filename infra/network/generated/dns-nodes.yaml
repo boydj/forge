@@ -7,15 +7,15 @@ anycast_v6:
 - 2a0f:85c1:368:1::1
 nodes:
   ams1:
-    ipv4: null
+    ipv4: 78.141.214.215
     ipv6: 2a0f:85c1:368:102::1
   ewr1:
     ipv4: 64.176.195.46
     ipv6: 2a0f:85c1:368:101::1
 nodes_provider:
   ams1:
-    ipv4: null
-    ipv6: null
+    ipv4: 78.141.214.215
+    ipv6: 2a05:f480:1400:3d99:5400:06ff:feac:9af4
   ewr1:
     ipv4: 64.176.195.46
     ipv6: 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3

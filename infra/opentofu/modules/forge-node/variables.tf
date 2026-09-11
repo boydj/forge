@@ -121,3 +121,15 @@ variable "bgp_announce" {
   type        = bool
   default     = false
 }
+
+variable "cluster_peers" {
+  description = "Other nodes of the cluster: name => control address ([wg address]:port). Rendered into [cluster.peers]."
+  type        = map(string)
+  default     = {}
+}
+
+variable "metadata_leader" {
+  description = "Node that owns users, certificates and SSH keys (cluster.metadata_leader). Empty = alphabetically first node."
+  type        = string
+  default     = ""
+}

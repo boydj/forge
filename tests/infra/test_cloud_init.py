@@ -87,6 +87,8 @@ def render_toml():
             "ssh_listen": '[":22"]',
             "metrics_listen": "[fd42::1]:9100",
             "cluster_enabled": "true",
+            "cluster_peers_toml": 'ams1 = "[fda5:bc65:9bb1:1::2]:9200"',
+            "metadata_leader": "ewr1",
             "announcer": "",
             "control_listen": "[fd42::1]:9200",
         },

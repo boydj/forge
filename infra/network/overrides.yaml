@@ -3,7 +3,11 @@
 pops:
   ewr1:
     provider_ipv4: 64.176.195.46
-    provider_ipv6: "2001:19f0:4000:3e3a:5400:06ff:feac:7bb3"
+    provider_ipv6: 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3
+  ams1:
+    provider_ipv4: 78.141.214.215
+    provider_ipv6: 2a05:f480:1400:3d99:5400:06ff:feac:9af4
 wireguard:
   public_keys:
-    ewr1: "qoH6gKdZWIsqPHF33Dvv47BG2I9W56SPefw5qa8Nc2k="
+    ewr1: qoH6gKdZWIsqPHF33Dvv47BG2I9W56SPefw5qa8Nc2k=
+    ams1: NpxqmLlbiXpFWcu2eCzihWSGEGqoos0xxSrDdKfw0mo=

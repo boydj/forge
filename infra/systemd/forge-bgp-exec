@@ -12,6 +12,16 @@ finish() { # finish <text>
 }
 case "$verb" in
   announce|withdraw|drain|undrain) ;;
+  state)
+    # Derive the state from bgp-announce's own report of state.conf.
+    out=$(/usr/local/bin/bgp-announce status 2>/dev/null || true)
+    case "$out" in
+      *"ANNOUNCE=true"*"DRAIN=true"*)  st=drained ;;
+      *"ANNOUNCE=true"*)               st=announced ;;
+      *"ANNOUNCE=false"*)              st=withdrawn ;;
+      *) finish "state $stamp failed unknown $(date -u +%Y-%m-%dT%H:%M:%SZ)"; exit 0 ;;
+    esac
+    finish "state $stamp ok $st $(date -u +%Y-%m-%dT%H:%M:%SZ)"; exit 0 ;;
   *) finish "$verb $stamp rejected invalid-verb $(date -u +%Y-%m-%dT%H:%M:%SZ)"; exit 0 ;;
 esac
 if /usr/local/bin/bgp-announce "$verb" > "$log" 2>&1; then r=ok; else r=failed; fi

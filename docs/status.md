@@ -4,12 +4,12 @@ Updated: 2026-09-10 (evening)
 
 ## Current milestone
 
-**M7 complete: ewr1 (Vultr New Jersey) announces 44.32.58.0/24 and
-2a0f:85c1:368::/48 via Vultr AS20473 (all RIS paths end `20473 215520`);
-git.as215520.net resolves to the anycast addresses 44.32.58.1 and
-2a0f:85c1:368:1::1 and answers on both. The Toronto (AS835) box is off; the
-aut-num lists only AS20473. The health controller drives the announcement
-through the forge-bgp request path.** M8 (second POP) is next. Hardening (security review, failure
+**M8 complete: two POPs, ewr1 (Vultr New Jersey) and ams1 (Vultr
+Amsterdam), announce 44.32.58.0/24 and 2a0f:85c1:368::/48 via Vultr
+AS20473 as anycast; they are joined by WireGuard and replicate (metadata
+leader ewr1). git.as215520.net resolves to 44.32.58.1 and
+2a0f:85c1:368:1::1. The first account (jdb, administrator) exists.** M9
+(second provider) is next. Hardening (security review, failure
 injection, load, interop), M11 Mercurial prototype and M6 desired state are
 done.
 
@@ -52,12 +52,13 @@ done.
 
 ## Running services
 
-- **ewr1** (Vultr `ewr`, `vc2-1c-1gb`, 64.176.195.46 / 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3):
+- **ewr1** (Vultr `ewr`, 64.176.195.46 / 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3) and
+  **ams1** (Vultr `ams`, 78.141.214.215 / 2a05:f480:1400:3d99:5400:06ff:feac:9af4):
   forge (Gemini/Titan :1965, Git SSH :22), forge-secrets (tmpfs), nftables,
-  wg0 (no peers yet), BIRD with `vultr4`/`vultr6` Established and both
-  prefixes exported (`bgp_announce = true`). DNS: `ewr1.nodes.as215520.net`,
-  `git.as215520.net` A/AAAA on the anycast addresses, SSHFP. Deployed
-  2026-09-11 with `tofu apply` + `scripts/deploy ewr1`.
+  wg0 mesh (handshakes both ways), replication over the mesh (metadata
+  leader ewr1), BIRD with `vultr4`/`vultr6` Established and both prefixes
+  exported from both nodes. DNS: `<pop>.nodes.as215520.net`,
+  `git.as215520.net` A/AAAA on the anycast addresses, SSHFP.
 - Local: `make run` serves gemini://localhost:1965/ and ssh://localhost:2222.
 
 ## Tests passing
@@ -118,7 +119,8 @@ Remaining operator actions:
 
 ## Next executable work
 
-1. M8: second POP (`ams1` in the address plan): `tofu apply` for it, WireGuard mesh, `cluster_enabled`, then anycast from two sites.
+1. M9: second provider module (`infra/opentofu/modules/<provider>-pop`) with the same outputs as vultr-pop; candidates in `docs/research/vultr.md` section 11.
+2. Dogfooding: push this repository to the forge (`docs/dogfooding.md`) now that two POPs replicate.
 2. M6: RIPE objects, rDNS, DS, PeeringDB (operator).
 3. Backup verification on ewr1 (`forge-backup.timer` runs nightly; check `/var/backups/forge`).
 4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).

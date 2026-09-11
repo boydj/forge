@@ -1,10 +1,10 @@
-# Dev POP on Vultr. Toggle with create_node so DNS-only applies never touch
-# the instance (and never need VULTR_API_KEY).
+# POPs on Vultr, one instance per entry of var.pops. Toggle with create_node
+# so DNS-only applies never touch instances (and never need VULTR_API_KEY).
 
 resource "vultr_ssh_key" "bootstrap" {
   count = var.create_node ? 1 : 0
 
-  name    = "forge-bootstrap-${var.pop_name}"
+  name    = "forge-bootstrap"
   ssh_key = var.bootstrap_ssh_public_key
 
   lifecycle {
@@ -16,15 +16,15 @@ resource "vultr_ssh_key" "bootstrap" {
 }
 
 module "pop" {
-  count  = var.create_node ? 1 : 0
-  source = "../../modules/vultr-pop"
+  for_each = var.create_node ? var.pops : {}
+  source   = "../../modules/vultr-pop"
 
-  name        = var.pop_name
-  region      = var.vultr_region
-  plan        = var.vultr_plan
+  name        = each.key
+  region      = each.value.region
+  plan        = each.value.plan
   os_id       = var.vultr_os_id
   ssh_key_ids = [vultr_ssh_key.bootstrap[0].id]
-  user_data   = module.node.cloud_init
+  user_data   = module.node[each.key].cloud_init
   tags        = ["env:dev"]
   backups     = "disabled"
 
@@ -32,24 +32,23 @@ module "pop" {
 }
 
 locals {
-  # Provider-assigned unicast addresses of the dev POP, if it exists, merged
-  # into the DNS node map so <pop>.nodes.<zone> follows the instance.
-  pop_dns_node = var.create_node ? {
-    (var.pop_name) = {
-      ipv4 = module.pop[0].ipv4
-      ipv6 = module.pop[0].ipv6
-    }
-  } : {}
+  # Provider-assigned unicast addresses of every created POP, merged into
+  # the DNS node map so <pop>.nodes.<zone> follows the instances.
+  pop_dns_nodes = {
+    for name, p in module.pop : name => { ipv4 = p.ipv4, ipv6 = p.ipv6 }
+  }
 }
 
-output "pop" {
-  description = "Dev POP facts (null when create_node = false)."
-  value = var.create_node ? {
-    id           = module.pop[0].id
-    ipv4         = module.pop[0].ipv4
-    ipv6         = module.pop[0].ipv6
-    ipv6_network = "${module.pop[0].ipv6_network}/${module.pop[0].ipv6_prefix}"
-    region       = module.pop[0].region
-    admin_ssh    = "ssh -p ${module.node.admin_ssh_port} deploy@${var.pop_name}.nodes.${var.zone_name}"
-  } : null
+output "pops" {
+  description = "POP facts (empty when create_node = false)."
+  value = {
+    for name, p in module.pop : name => {
+      id           = p.id
+      ipv4         = p.ipv4
+      ipv6         = p.ipv6
+      ipv6_network = "${p.ipv6_network}/${p.ipv6_prefix}"
+      region       = p.region
+      admin_ssh    = "ssh -p ${module.node[name].admin_ssh_port} deploy@${name}.nodes.${var.zone_name}"
+    }
+  }
 }

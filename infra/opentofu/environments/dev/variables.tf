@@ -61,29 +61,9 @@ variable "create_node" {
   default     = false
 }
 
-variable "pop_name" {
-  description = "Dev POP name."
-  type        = string
-  default     = "ewr1"
-}
 
-variable "pop_index" {
-  description = "Index of the POP in infra/network/address-plan.yaml."
-  type        = number
-  default     = 1
-}
 
-variable "vultr_region" {
-  description = "Vultr region for the dev POP."
-  type        = string
-  default     = "ewr"
-}
 
-variable "vultr_plan" {
-  description = "Vultr plan for the dev POP."
-  type        = string
-  default     = "vc2-1c-1gb"
-}
 
 variable "vultr_os_id" {
   description = "Vultr OS ID (2625 = Debian 13)."
@@ -103,26 +83,33 @@ variable "operator_ssh_public_keys" {
   default     = null
 }
 
-variable "unicast_v6_block" {
-  description = "This POP's /64 from the operator /48 (address-plan.yaml). null = none."
+
+
+
+
+variable "pops" {
+  description = "POPs of this environment, keyed by name (values from infra/network/address-plan.yaml). Every POP gets a Vultr instance (when create_node), DNS under nodes.<zone>, and a rendered node config."
+  type = map(object({
+    region           = string
+    plan             = optional(string, "vc2-1c-1gb")
+    index            = number
+    unicast_v6_block = string
+    wg_address       = string # address/prefix, e.g. "fda5:bc65:9bb1:1::1/64"
+    cluster_enabled  = optional(bool, true)
+    bgp_announce     = optional(bool, false)
+    role             = optional(string, "replica")
+  }))
+  default = {}
+}
+
+variable "metadata_leader" {
+  description = "Node that owns users, certificates and SSH keys (cluster.metadata_leader)."
   type        = string
-  default     = null
+  default     = ""
 }
 
-variable "wg_address" {
-  description = "This POP's WireGuard address/prefix (address-plan.yaml). null = no mesh."
-  type        = string
-  default     = null
-}
-
-variable "cluster_enabled" {
-  description = "Enable forge replication on the dev node."
-  type        = bool
-  default     = false
-}
-
-variable "bgp_announce" {
-  description = "Enable anycast announcement on the dev POP (M7 go-live). See docs/runbooks/network-bootstrap.md."
-  type        = bool
-  default     = false
+variable "control_port" {
+  description = "Cluster control port over WireGuard."
+  type        = number
+  default     = 9200
 }

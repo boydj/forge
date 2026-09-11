@@ -164,13 +164,32 @@ func (c *Controller) Run(ctx context.Context) error {
 	}
 }
 
-// reconcile makes the on-disk BIRD state match the controller's initial
-// withdrawn state. A previous instance leaves the prefix drained on a
-// graceful stop; a crashed one may leave it announced. Either way this node
-// has not yet proven it is healthy. The script is idempotent.
+// reconcile aligns the controller with the node's announcement state at
+// startup. When the announcer can report it, the current state is adopted:
+// a node that was announcing keeps announcing across a restart or deploy,
+// and the regular checks decide what happens next (an unhealthy node is
+// drained and withdrawn by the normal thresholds). Without a report the
+// node has not proven itself and is withdrawn; the script is idempotent.
 func (c *Controller) reconcile(ctx context.Context) {
 	c.opMu.Lock()
 	defer c.opMu.Unlock()
+	if r, ok := c.ann.(StateReporter); ok {
+		if st, err := r.State(ctx); err == nil {
+			c.mu.Lock()
+			c.state = st
+			if st == StateAnnounced {
+				// Count the adoption as a recovery so a healthy node is not
+				// re-drained by the cooldown bookkeeping.
+				c.successes = c.cfg.SuccessesToRecover
+			}
+			c.mu.Unlock()
+			c.met.SetAnnounced(st == StateAnnounced)
+			c.log.Info("bgp state adopted", "state", st.String(), "reason", "startup")
+			return
+		} else {
+			c.log.Warn("bgp state unknown at startup; withdrawing", "err", err)
+		}
+	}
 	if err := c.ann.Withdraw(ctx); err != nil {
 		c.log.Error("bgp initial withdraw failed", "err", err)
 		return

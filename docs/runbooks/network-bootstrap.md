@@ -320,6 +320,17 @@ tree + `scripts/deploy ewr1`.
 
 ## Step 8. Second POP -> anycast (operator; repeat 5 and 7 for ams1)
 
+Done 2026-09-11 for ams1 (Vultr Amsterdam). The dev environment takes a
+`pops` map (`dev.auto.tfvars`); adding a POP is one map entry plus its
+WireGuard key (`scripts/secrets`, `wireguard_private_keys.<pop>`, public key
+into `infra/network/overrides.yaml`). Creating a POP needs a targeted apply
+first, because the DNS records' `for_each` depends on the new instance's
+addresses: `tofu apply -target='module.pop["<pop>"]'`, then a plain
+`tofu apply`. Then `scripts/netgen --overrides ...`, `deploy init-node <pop>`,
+`deploy <pop>`, and a `deploy` of every existing POP so their WireGuard peers
+and `[cluster.peers]` pick up the newcomer. Set `bgp_announce = true` for it
+once `forge admin pop status` on the new node shows its replicas OK.
+
 Prerequisites: instance limit raised to >= 2 (Vultr *Billing > Account
 limits*); the WireGuard public key of ewr1 registered in the overrides file;
 step 7c stable for a few days. Run step 5 for `ams1` (a second environment

@@ -408,6 +408,14 @@ write_files:
       define ANNOUNCE = false;
       define DRAIN = false;
 
+  # A drop-in survives the package's conffile handling (the defaults file
+  # alone left node-exporter on :9100 on a fresh ams1).
+  - path: /etc/systemd/system/prometheus-node-exporter.service.d/forge.conf
+    permissions: "0644"
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/bin/prometheus-node-exporter --web.listen-address=:9101 --collector.disable-defaults --collector.cpu --collector.meminfo --collector.filesystem --collector.netdev --collector.loadavg --collector.diskstats --collector.systemd
   - path: /etc/default/prometheus-node-exporter
     permissions: "0644"
     defer: true
@@ -458,6 +466,7 @@ runcmd:
   - [systemctl, enable, --now, bird, prometheus-node-exporter, unattended-upgrades, forge-bgp.path]
   # apt started node-exporter before write_files placed its ARGS (:9101);
   # restart so it releases :9100 for forge metrics.
+  - [systemctl, daemon-reload]
   - [systemctl, restart, prometheus-node-exporter]
   - [systemctl, start, forge-maintenance.timer, forge-backup.timer]
   # Console lines for the operator: age recipient, and the sshd host key for

@@ -145,6 +145,46 @@ type Announcer interface {
 	Undrain(ctx context.Context) error
 }
 
+// StateReporter is implemented by announcers that can report the current
+// on-node announcement state so a restarted controller adopts it instead
+// of withdrawing (which would drop traffic on every deploy).
+type StateReporter interface {
+	State(ctx context.Context) (State, error)
+}
+
+// ParseState maps announcer output to a State.
+func ParseState(s string) (State, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "announced":
+		return StateAnnounced, nil
+	case "drained":
+		return StateDrained, nil
+	case "withdrawn":
+		return StateWithdrawn, nil
+	}
+	return StateWithdrawn, fmt.Errorf("unknown announcer state %q", strings.TrimSpace(s))
+}
+
+// State implements StateReporter by running "<path> state", which prints
+// announced, drained or withdrawn.
+func (e *ExecAnnouncer) State(ctx context.Context) (State, error) {
+	timeout := e.Timeout
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, e.Path, "state")
+	if e.Env != nil {
+		cmd.Env = e.Env
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return StateWithdrawn, err
+	}
+	return ParseState(string(out))
+}
+
 // NopAnnouncer does nothing; used when BGP control is disabled.
 type NopAnnouncer struct{}
 

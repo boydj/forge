@@ -39,10 +39,11 @@ announcer     = "${announcer}"
 interval      = "10s"
 
 [cluster]
-enabled        = ${cluster_enabled}
-control_listen = "${control_listen}"
-secret_file    = "/run/forge/secrets/cluster.secret"
-sync_interval  = "10s"
-# peers are appended by scripts/deploy from infra/network/address-plan.yaml:
-# [cluster.peers]
-# fra1 = "[fd00:...::2]:9200"
+enabled         = ${cluster_enabled}
+control_listen  = "${control_listen}"
+secret_file     = "/run/forge/secrets/cluster.secret"
+sync_interval   = "10s"
+metadata_leader = "${metadata_leader}"
+# Peers (name = control address over WireGuard), from the environment's pops map.
+[cluster.peers]
+${cluster_peers_toml}

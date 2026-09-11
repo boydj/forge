@@ -8,7 +8,7 @@ module "dns" {
 
   anycast_v4 = var.anycast_v4
   anycast_v6 = var.anycast_v6
-  nodes      = merge(var.nodes, local.pop_dns_node)
+  nodes      = merge(var.nodes, local.pop_dns_nodes)
   sshfp      = var.sshfp
 
   ttl           = 300

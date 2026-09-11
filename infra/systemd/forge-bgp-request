@@ -1,5 +1,5 @@
 #!/bin/sh
-# forge-bgp-request <announce|withdraw|drain|undrain|status>
+# forge-bgp-request <announce|withdraw|drain|undrain|state|status>
 # Runs as the unprivileged forge user (health controller's announcer). It
 # only writes the requested verb to $STATE_DIR/bgp.request; the root-owned
 # forge-bgp.path/.service pair validates the verb and runs bgp-announce.
@@ -9,8 +9,9 @@ STATE_DIR=${FORGE_BGP_DIR:-/var/lib/forge}
 verb=${1:-}
 case "$verb" in
   announce|withdraw|drain|undrain) ;;
+  state) ;;  # answered by the root side from bgp-announce status: announced|drained|withdrawn
   status) exec cat "$STATE_DIR/bgp.result" 2>/dev/null || { echo "no result yet"; exit 0; } ;;
-  *) echo "usage: forge-bgp-request announce|withdraw|drain|undrain|status" >&2; exit 2 ;;
+  *) echo "usage: forge-bgp-request announce|withdraw|drain|undrain|state|status" >&2; exit 2 ;;
 esac
 req="$STATE_DIR/bgp.request"; res="$STATE_DIR/bgp.result"
 stamp=$(date -u +%Y%m%dT%H%M%S.%NZ)
@@ -19,6 +20,11 @@ printf '%s %s\n' "$verb" "$stamp" > "$req.tmp" && mv -f "$req.tmp" "$req"
 i=0
 while [ $i -lt 100 ]; do
   if [ -s "$res" ] && grep -q "$stamp" "$res"; then
+    if [ "$verb" = state ]; then
+      # "state <stamp> ok <announced|drained|withdrawn> <time>"
+      set -- $(cat "$res"); [ "${3:-}" = ok ] && { echo "${4:-}"; exit 0; }
+      cat "$res" >&2; exit 1
+    fi
     if grep -q " ok " "$res"; then exit 0; fi
     cat "$res" >&2; exit 1
   fi

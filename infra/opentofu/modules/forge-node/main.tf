@@ -29,15 +29,17 @@ locals {
   nftables_conf = templatefile("${local.repo_root}/infra/firewall/nftables.conf.tftpl", local.nftables_vars)
 
   forge_toml = templatefile("${local.repo_root}/infra/cloud-init/forge.toml.tftpl", {
-    node             = var.name
-    service_hostname = var.service_hostname
-    title            = var.title
-    gemini_listen    = jsonencode([":1965"]) # TOML string array == JSON array
-    ssh_listen       = jsonencode([":22"])
-    metrics_listen   = local.metrics_listen
-    cluster_enabled  = local.cluster_enabled
-    control_listen   = local.control_listen
-    announcer        = var.bgp_announce ? "/usr/local/bin/forge-bgp-request" : ""
+    node               = var.name
+    service_hostname   = var.service_hostname
+    title              = var.title
+    gemini_listen      = jsonencode([":1965"]) # TOML string array == JSON array
+    ssh_listen         = jsonencode([":22"])
+    metrics_listen     = local.metrics_listen
+    cluster_enabled    = local.cluster_enabled
+    control_listen     = local.control_listen
+    cluster_peers_toml = join("\n", [for n, a in var.cluster_peers : "${n} = \"${a}\""])
+    metadata_leader    = var.metadata_leader
+    announcer          = var.bgp_announce ? "/usr/local/bin/forge-bgp-request" : ""
   })
 
   cloud_init = templatefile("${local.repo_root}/infra/cloud-init/node.yaml.tftpl", {
