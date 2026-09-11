@@ -18,7 +18,21 @@ Authoritative sources checked (2026-09-10): RIPE DB REST
 (`rest.db.ripe.net/ripe/{aut-num,as-set,route6,inet6num}`), RADB
 (`whois.radb.net`), ARIN RDAP.
 
-## How to submit to the RIPE DB
+## Submitting from the repository
+
+With a Database API key in the bundle (`scripts/secrets edit
+infra/secrets/dev.enc.yaml`, key `ripe_db_api_key: "KEYID:SECRET"`):
+
+```
+scripts/ripe-submit diff  infra/network/irr/as-set-AS215520-AS-ALL.rpsl infra/network/irr/aut-num-AS215520.rpsl   # live vs template
+scripts/ripe-submit check infra/network/irr/as-set-AS215520-AS-ALL.rpsl infra/network/irr/aut-num-AS215520.rpsl   # REST dry run
+scripts/ripe-submit apply infra/network/irr/as-set-AS215520-AS-ALL.rpsl infra/network/irr/aut-num-AS215520.rpsl   # for real
+scripts/netcheck                                                                                                # verify
+```
+
+Create the as-set before the aut-num update: the aut-num exports reference it.
+
+## How to submit to the RIPE DB (by hand)
 
 `JOSHBOYD-MNT` authenticates with **RIPE NCC Access (SSO) only**; there is no
 `MD5-PW` or PGP credential on the maintainer and none should be added. That

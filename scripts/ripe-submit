@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""Submit RIPE Database objects from infra/network/irr/*.rpsl through the
+REST API, with a diff against the live object and a dry run first.
+
+  scripts/ripe-submit diff  <file.rpsl>...       live object vs template (no key needed)
+  scripts/ripe-submit check <file.rpsl>...       REST dry run (needs the key; changes nothing)
+  scripts/ripe-submit apply <file.rpsl>...       create or update for real
+
+The API key (RIPE DB > My Account > API keys; format KEYID:SECRET) comes from
+$RIPE_DB_API_KEY or the SOPS bundle key `ripe_db_api_key`
+(scripts/secrets get infra/secrets/dev.enc.yaml ripe_db_api_key). Keys are
+scoped to the maintainer and expire; never commit one.
+
+Templates: lines starting with '#' are comments; RIPE NCC-managed attributes
+are submitted verbatim (the API rejects changes to them). The object type
+is the first attribute; the primary key is its value.
+"""
+import base64
+import difflib
+import json
+import os
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+
+REST = "https://rest.db.ripe.net/ripe"
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def parse_rpsl(path: str) -> list[tuple[str, str]]:
+    attrs: list[tuple[str, str]] = []
+    for raw in open(path, encoding="utf-8"):
+        line = raw.rstrip("\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line[0] in " \t+" and attrs:  # continuation line
+            name, value = attrs[-1]
+            attrs[-1] = (name, value + " " + line[1:].strip())
+            continue
+        name, _, value = line.partition(":")
+        attrs.append((name.strip(), value.strip()))
+    if not attrs:
+        sys.exit(f"{path}: no attributes")
+    return attrs
+
+
+def fetch_live(obj_type: str, key: str) -> list[tuple[str, str]] | None:
+    url = f"{REST}/{obj_type}/{urllib.request.quote(key, safe='')}?unfiltered"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            d = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        sys.exit(f"fetch {url}: HTTP {e.code}")
+    o = d["objects"]["object"][0]
+    return [(a["name"], a["value"]) for a in o["attributes"]["attribute"]]
+
+
+def render(attrs: list[tuple[str, str]]) -> str:
+    return "".join(f"{n + ':':16}{v}\n" for n, v in attrs)
+
+
+def api_key() -> str:
+    k = os.environ.get("RIPE_DB_API_KEY", "").strip()
+    if not k:
+        try:
+            k = subprocess.run(
+                [os.path.join(ROOT, "scripts", "secrets"), "get",
+                 os.path.join(ROOT, "infra", "secrets", "dev.enc.yaml"), "ripe_db_api_key"],
+                check=True, capture_output=True, text=True).stdout.strip()
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            k = ""
+    if not k or ":" not in k:
+        sys.exit("no RIPE API key: set RIPE_DB_API_KEY=KEYID:SECRET or add ripe_db_api_key to infra/secrets/dev.enc.yaml")
+    return k
+
+
+def whois_resource(obj_type: str, attrs: list[tuple[str, str]]) -> bytes:
+    body = {"objects": {"object": [{
+        "source": {"id": "ripe"},
+        "attributes": {"attribute": [{"name": n, "value": v} for n, v in attrs]},
+    }]}}
+    return json.dumps(body).encode()
+
+
+def submit(obj_type: str, key: str, attrs: list[tuple[str, str]], exists: bool, dry: bool, token: str) -> int:
+    url = f"{REST}/{obj_type}" + (f"/{urllib.request.quote(key, safe='')}" if exists else "")
+    url += "?dry-run=true" if dry else ""
+    req = urllib.request.Request(url, data=whois_resource(obj_type, attrs), method="PUT" if exists else "POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json")
+    req.add_header("Authorization", "Basic " + base64.b64encode(token.encode()).decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.load(r)
+            status = r.status
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.load(e)
+        except Exception:
+            d = {}
+        status = e.code
+    msgs = d.get("errormessages", {}).get("errormessage", []) if isinstance(d, dict) else []
+    for m in msgs:
+        text = m.get("text", "")
+        args = [a.get("value", "") for a in m.get("args", [])]
+        try:
+            text = text % tuple(args) if args else text
+        except TypeError:
+            pass
+        print(f"  [{m.get('severity', '?')}] {text.strip()}")
+    verb = ("dry-run " if dry else "") + ("update" if exists else "create")
+    ok = status == 200
+    print(f"{obj_type} {key}: {verb} -> HTTP {status} {'OK' if ok else 'FAILED'}")
+    return 0 if ok else 1
+
+
+def main() -> int:
+    if len(sys.argv) < 3 or sys.argv[1] not in ("diff", "check", "apply"):
+        print(__doc__)
+        return 2
+    cmd, files = sys.argv[1], sys.argv[2:]
+    token = api_key() if cmd != "diff" else ""
+    rc = 0
+    for f in files:
+        attrs = parse_rpsl(f)
+        obj_type, key = attrs[0]
+        live = fetch_live(obj_type, key)
+        if cmd == "diff":
+            a = render(live).splitlines(keepends=True) if live else []
+            b = render(attrs).splitlines(keepends=True)
+            print(f"== {obj_type} {key}: {'exists' if live else 'DOES NOT EXIST (will be created)'}")
+            sys.stdout.writelines(difflib.unified_diff(a, b, "live", os.path.relpath(f, ROOT)))
+            if live and a == b:
+                print("(no change)")
+            continue
+        rc |= submit(obj_type, key, attrs, live is not None, cmd == "check", token)
+    return rc
+
+
+if __name__ == "__main__":
+    sys.exit(main())

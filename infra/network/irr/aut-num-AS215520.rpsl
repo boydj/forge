@@ -22,10 +22,9 @@ descr:          anycast Gemini/Titan/SSH forge: git.as215520.net
 org:            ORG-JB158-RIPE
 sponsoring-org: ORG-ICL64-RIPE
 remarks:        ----------------------------------------------------------
-remarks:        Originates exactly two prefixes, both anycast, both with
-remarks:        RPKI ROAs at maxLength == prefix length:
-remarks:          44.32.58.0/24      (ARDC 44Net, ARIN TA)
-remarks:          2a0f:85c1:368::/48 (RIPE TA)
+remarks:        Originates exactly two prefixes, both anycast:
+remarks:          44.32.58.0/24      (ARDC 44Net; no ROA possible, RPKI not-found)
+remarks:          2a0f:85c1:368::/48 (RIPE ROA, maxLength 48)
 remarks:        as-set: AS215520:AS-ALL   (RIPE::AS215520:AS-ALL in PeeringDB)
 remarks:        ----------------------------------------------------------
 remarks:        --- IPv4 transit: Vultr / The Constant Company ---
