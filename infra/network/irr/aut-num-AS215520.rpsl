@@ -6,9 +6,8 @@
 #   - import/export for AS209735 (Lagrange) and AS207841 (Inferno) removed:
 #     neither has been an observed neighbour (RIPEstat asn-neighbours).
 #   - IPv4 + IPv6 policy for AS20473 (Vultr) added: the forge POPs.
-#   - IPv6 policy for AS835 (GoCodeIT/Xenyth, Toronto) added: it carries the
-#     /48 today. Delete those two lines when the section-6 withdraw is done
-#     (docs/network-architecture.md, section 6).
+#   - AS835 (GoCodeIT/Xenyth, Toronto) policy removed 2026-09-11: the /48
+#     migrated to the forge POPs (ADR 0013), Toronto is switched off.
 #   - exports reference the as-set AS215520:AS-ALL (create it first,
 #     as-set-AS215520-AS-ALL.rpsl; it expands to AS215520 only).
 #   - remarks with abuse mailbox, website, and the policy summary.
@@ -33,10 +32,6 @@ export:         to AS20473 announce AS215520:AS-ALL
 remarks:        --- IPv6 transit: Vultr ---
 mp-import:      afi ipv6.unicast from AS20473 accept ANY
 mp-export:      afi ipv6.unicast to AS20473 announce AS215520:AS-ALL
-remarks:        --- IPv6 transit: GoCodeIT / Xenyth Cloud, Toronto ---
-remarks:        (carries 2a0f:85c1:368::/48 today; remove after migration)
-mp-import:      afi ipv6.unicast from AS835 accept ANY
-mp-export:      afi ipv6.unicast to AS835 announce AS215520:AS-ALL
 remarks:        ----------------------------------------------------------
 remarks:        abuse: abuse@unplanks.com (abuse-c ACRO55456-RIPE)
 remarks:        noc: boydjd@jbip.net

@@ -1,0 +1,10 @@
+[Unit]
+Description=forge BGP announcement executor (root side of forge-bgp-request)
+After=bird.service
+
+[Service]
+Type=oneshot
+# The forge daemon is sandboxed (NoNewPrivileges, read-only /etc), so it
+# cannot touch BIRD itself. It writes one of four verbs to bgp.request; this
+# unit validates the verb and runs bgp-announce, then records the result.
+ExecStart=/usr/local/sbin/forge-bgp-exec

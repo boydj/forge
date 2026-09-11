@@ -33,7 +33,8 @@ listen = "${metrics_listen}"
 
 [health]
 # Anycast announcement control (docs/health.md). Empty = checks only, never
-# announce; set by the bgp_announce variable of modules/forge-node.
+# announce; set by the bgp_announce variable of modules/forge-node. The
+# request script hands the verb to the root-side forge-bgp.service.
 announcer     = "${announcer}"
 interval      = "10s"
 

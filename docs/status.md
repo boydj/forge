@@ -4,11 +4,12 @@ Updated: 2026-09-10 (evening)
 
 ## Current milestone
 
-**M4 complete: the first POP (ewr1, Vultr New Jersey) is provisioned from
-code and serves gemini://git.as215520.net/ and git@git.as215520.net over
-IPv4 and IPv6 (Phase 1: DNS points at the node's provider addresses). BGP
-sessions to Vultr are established on both families; announcement of the
-prefixes is gated on the operator (M7).** Hardening (security review, failure
+**M7 complete: ewr1 (Vultr New Jersey) announces 44.32.58.0/24 and
+2a0f:85c1:368::/48 via Vultr AS20473 (all RIS paths end `20473 215520`);
+git.as215520.net resolves to the anycast addresses 44.32.58.1 and
+2a0f:85c1:368:1::1 and answers on both. The Toronto (AS835) box is off; the
+aut-num lists only AS20473. The health controller drives the announcement
+through the forge-bgp request path.** M8 (second POP) is next. Hardening (security review, failure
 injection, load, interop), M11 Mercurial prototype and M6 desired state are
 done.
 
@@ -53,10 +54,10 @@ done.
 
 - **ewr1** (Vultr `ewr`, `vc2-1c-1gb`, 64.176.195.46 / 2001:19f0:4000:3e3a:5400:06ff:feac:7bb3):
   forge (Gemini/Titan :1965, Git SSH :22), forge-secrets (tmpfs), nftables,
-  wg0 (no peers yet), BIRD with `vultr4`/`vultr6` Established and
-  `ANNOUNCE=false`. DNS: `ewr1.nodes.as215520.net`, `git.as215520.net`
-  (A/AAAA to the node, SSHFP). Deployed 2026-09-11 with
-  `tofu apply` + `scripts/deploy ewr1`.
+  wg0 (no peers yet), BIRD with `vultr4`/`vultr6` Established and both
+  prefixes exported (`bgp_announce = true`). DNS: `ewr1.nodes.as215520.net`,
+  `git.as215520.net` A/AAAA on the anycast addresses, SSHFP. Deployed
+  2026-09-11 with `tofu apply` + `scripts/deploy ewr1`.
 - Local: `make run` serves gemini://localhost:1965/ and ssh://localhost:2222.
 
 ## Tests passing
@@ -101,10 +102,10 @@ the /24 (expected not-found).
 
 Remaining operator actions:
 
-1. **Go-live of BGP announcement (M7)**: say the word, then `bgp_announce = true`
-   in `dev.auto.tfvars`, `scripts/deploy ewr1`; the health controller
-   announces once checks pass; verify with `scripts/netcheck --expect announced`
-   and withdraw the AS835 (Toronto) announcement of the /48 afterwards.
+1. Done 2026-09-11: BGP go-live (M7). The website origin
+   `as215520.net`/`www` AAAA `2a0f:85c1:368::b00b` lived on the Toronto box
+   and is unreachable now; move it (ewr1 can carry any /48 address) or
+   re-point the records.
 2. Done 2026-09-11: `as-set AS215520:AS-ALL` created and `aut-num AS215520`
    updated in the RIPE Database from `infra/opentofu/environments/ripe`
    (frederic-arr/ripedb provider; plan is clean). After the Toronto
@@ -117,7 +118,7 @@ Remaining operator actions:
 
 ## Next executable work
 
-1. M7: enable announcement on ewr1 on operator go-ahead (see human blockers), switch `git.as215520.net` back to the anycast addresses, withdraw AS835.
+1. M8: second POP (`ams1` in the address plan): `tofu apply` for it, WireGuard mesh, `cluster_enabled`, then anycast from two sites.
 2. M6: RIPE objects, rDNS, DS, PeeringDB (operator).
 3. Backup verification on ewr1 (`forge-backup.timer` runs nightly; check `/var/backups/forge`).
 4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).

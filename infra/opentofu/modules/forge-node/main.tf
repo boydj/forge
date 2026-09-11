@@ -37,7 +37,7 @@ locals {
     metrics_listen   = local.metrics_listen
     cluster_enabled  = local.cluster_enabled
     control_listen   = local.control_listen
-    announcer        = var.bgp_announce ? "/usr/local/bin/bgp-announce" : ""
+    announcer        = var.bgp_announce ? "/usr/local/bin/forge-bgp-request" : ""
   })
 
   cloud_init = templatefile("${local.repo_root}/infra/cloud-init/node.yaml.tftpl", {
@@ -61,5 +61,9 @@ locals {
     forge_backup_service      = file("${local.repo_root}/infra/systemd/forge-backup.service")
     forge_backup_timer        = file("${local.repo_root}/infra/systemd/forge-backup.timer")
     forge_backup_script       = file("${local.repo_root}/infra/backup/forge-backup")
+    forge_bgp_service         = file("${local.repo_root}/infra/systemd/forge-bgp.service")
+    forge_bgp_path            = file("${local.repo_root}/infra/systemd/forge-bgp.path")
+    forge_bgp_request         = file("${local.repo_root}/infra/systemd/forge-bgp-request")
+    forge_bgp_exec            = file("${local.repo_root}/infra/systemd/forge-bgp-exec")
   })
 }

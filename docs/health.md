@@ -301,3 +301,17 @@ hcancel()
 
 Cancel the health context and wait for `Run` before closing the listeners
 so the drain reaches BIRD while the daemon still answers.
+
+## Privilege boundary on a node
+
+`forge serve` runs sandboxed (`User=forge`, `NoNewPrivileges`, read-only
+`/etc`), so it cannot run `bgp-announce` itself. The announcer configured in
+`forge.toml` is `/usr/local/bin/forge-bgp-request`, which writes one of
+`announce|withdraw|drain|undrain` to `/var/lib/forge/bgp.request` and waits
+(up to 20 s) for `/var/lib/forge/bgp.result`. The root-owned
+`forge-bgp.path` unit watches that file and runs `forge-bgp-exec`, which
+validates the verb, runs `bgp-announce`, and records `ok`/`failed`. A
+compromised forge process can therefore only choose among the four verbs;
+it cannot write BIRD configuration. `forge-bgp-request status` prints the
+last result. Both files are installed by cloud-init and refreshed by
+`scripts/deploy sysupdate`.

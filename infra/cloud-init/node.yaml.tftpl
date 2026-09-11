@@ -146,6 +146,24 @@ write_files:
     permissions: "0755"
     content: |
       ${indent(6, forge_backup_script)}
+  # BGP announcement requests: the sandboxed forge writes a verb, the root
+  # path unit runs bgp-announce (docs/health.md).
+  - path: /etc/systemd/system/forge-bgp.service
+    permissions: "0644"
+    content: |
+      ${indent(6, forge_bgp_service)}
+  - path: /etc/systemd/system/forge-bgp.path
+    permissions: "0644"
+    content: |
+      ${indent(6, forge_bgp_path)}
+  - path: /usr/local/bin/forge-bgp-request
+    permissions: "0755"
+    content: |
+      ${indent(6, forge_bgp_request)}
+  - path: /usr/local/sbin/forge-bgp-exec
+    permissions: "0755"
+    content: |
+      ${indent(6, forge_bgp_exec)}
 
   # --- Secrets in tmpfs (SR-02) and the deploy user's only root command
   # (SR-19a). Both are inline copies of infra/systemd/forge-secrets.service
@@ -437,7 +455,7 @@ runcmd:
   - [systemctl, daemon-reload]
   - [systemctl, enable, --now, forge-secrets.service]
   - [systemctl, enable, forge.service, forge-maintenance.timer, forge-backup.timer, wg-quick@wg0.service]
-  - [systemctl, enable, --now, bird, prometheus-node-exporter, unattended-upgrades]
+  - [systemctl, enable, --now, bird, prometheus-node-exporter, unattended-upgrades, forge-bgp.path]
   # apt started node-exporter before write_files placed its ARGS (:9101);
   # restart so it releases :9100 for forge metrics.
   - [systemctl, restart, prometheus-node-exporter]

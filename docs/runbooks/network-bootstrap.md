@@ -263,7 +263,9 @@ S= bgp-announce status                  # withdrawn
 
 7a'. The gate. `forge.toml` only carries `health.announcer` when the POP's
 `bgp_announce` variable is true (`infra/opentofu/environments/dev/dev.auto.tfvars`);
-without it the health controller runs checks but never calls `bgp-announce`.
+without it the health controller runs checks but never requests an
+announcement (it goes through `forge-bgp-request` and the root-side
+`forge-bgp.path`/`forge-bgp-exec`; see `docs/health.md`).
 Going live is therefore: set `bgp_announce = true`, `scripts/deploy ewr1`, and
 watch `journalctl -u forge | grep -i announce` on the node. The controller
 announces after six green 10 s ticks and a 120 s cooldown. Manual

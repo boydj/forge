@@ -121,6 +121,10 @@ class CloudInitTemplate(unittest.TestCase):
             "forge_backup_service": read(os.path.join(ROOT, "infra", "systemd", "forge-backup.service")),
             "forge_backup_timer": read(os.path.join(ROOT, "infra", "systemd", "forge-backup.timer")),
             "forge_backup_script": read(os.path.join(ROOT, "infra", "backup", "forge-backup")),
+            "forge_bgp_service": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp.service")),
+            "forge_bgp_path": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp.path")),
+            "forge_bgp_request": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp-request")),
+            "forge_bgp_exec": read(os.path.join(ROOT, "infra", "systemd", "forge-bgp-exec")),
             "anycast_network_addresses": "Address=192.0.2.1/32\nAddress=2001:db8::1/128",
             "operator_ssh_authorized_keys": "      - ssh-ed25519 AAAAexample operator\n      - ssh-ed25519 AAAAexample2 ci",
         }
@@ -178,6 +182,10 @@ class CloudInitTemplate(unittest.TestCase):
             "/etc/systemd/system/forge-backup.service": "forge_backup_service",
             "/etc/systemd/system/forge-backup.timer": "forge_backup_timer",
             "/usr/local/bin/forge-backup": "forge_backup_script",
+            "/etc/systemd/system/forge-bgp.service": "forge_bgp_service",
+            "/etc/systemd/system/forge-bgp.path": "forge_bgp_path",
+            "/usr/local/bin/forge-bgp-request": "forge_bgp_request",
+            "/usr/local/sbin/forge-bgp-exec": "forge_bgp_exec",
         }
         for path, name in expect.items():
             self.assertIn(path, files)

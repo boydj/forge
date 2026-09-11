@@ -257,7 +257,9 @@ push_system_files() { # push_system_files <root@host>
   local t=$1 u
   log "installing root-executed files (units, forge-deploy-helper, bgp-announce, forge-backup) as root"
   root_file "$t" "$ROOT/infra/systemd/forge-deploy-helper" "$HELPER" 0755
-  for u in forge.service forge-secrets.service forge-maintenance.service forge-maintenance.timer forge-backup.service forge-backup.timer; do
+  root_file "$t" "$ROOT/infra/systemd/forge-bgp-request" /usr/local/bin/forge-bgp-request 0755
+  root_file "$t" "$ROOT/infra/systemd/forge-bgp-exec" /usr/local/sbin/forge-bgp-exec 0755
+  for u in forge.service forge-secrets.service forge-maintenance.service forge-maintenance.timer forge-backup.service forge-backup.timer forge-bgp.service forge-bgp.path; do
     root_file "$t" "$ROOT/infra/systemd/$u" "/etc/systemd/system/$u" 0644
   done
   root_file "$t" "$ROOT/infra/backup/forge-backup" /usr/local/bin/forge-backup 0755
@@ -271,6 +273,7 @@ chmod 0440 /etc/sudoers.d/deploy.tmp && mv -f /etc/sudoers.d/deploy.tmp /etc/sud
 visudo -c >/dev/null
 systemctl daemon-reload
 systemctl enable forge-secrets.service >/dev/null 2>&1 || true
+systemctl enable --now forge-bgp.path >/dev/null 2>&1 || true
 echo "system files installed; run: scripts/deploy <pop>"
 EOT
 }

@@ -1,0 +1,18 @@
+#!/bin/sh
+# forge-bgp-exec: root side of forge-bgp-request, run by forge-bgp.service
+# whenever /var/lib/forge/bgp.request changes. Validates the verb written by
+# the sandboxed forge user, runs bgp-announce, records the outcome.
+set -eu
+DIR=${FORGE_BGP_DIR:-/var/lib/forge}
+req="$DIR/bgp.request"; res="$DIR/bgp.result"; log="$DIR/bgp.log"
+[ -s "$req" ] || exit 0
+read -r verb stamp < "$req" || exit 0
+finish() { # finish <text>
+  printf '%s\n' "$1" > "$res.tmp"; chown forge:forge "$res.tmp" 2>/dev/null || true; mv -f "$res.tmp" "$res"
+}
+case "$verb" in
+  announce|withdraw|drain|undrain) ;;
+  *) finish "$verb $stamp rejected invalid-verb $(date -u +%Y-%m-%dT%H:%M:%SZ)"; exit 0 ;;
+esac
+if /usr/local/bin/bgp-announce "$verb" > "$log" 2>&1; then r=ok; else r=failed; fi
+finish "$verb $stamp $r $(date -u +%Y-%m-%dT%H:%M:%SZ)"

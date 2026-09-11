@@ -1,0 +1,9 @@
+[Unit]
+Description=forge BGP announcement requests (watches bgp.request)
+
+[Path]
+PathChanged=/var/lib/forge/bgp.request
+Unit=forge-bgp.service
+
+[Install]
+WantedBy=multi-user.target
