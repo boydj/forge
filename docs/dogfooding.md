@@ -84,3 +84,14 @@ identity rotation forced by a node compromise, or two unplanned outages of
 the leader in a month. In that case `git push --mirror github` from a
 clone makes GitHub canonical again within minutes; that is why the mirror
 is kept warm.
+
+## The documentation site
+
+`gemini://git.as215520.net/docs/` is this directory, read straight from
+`jdb/forge` at its default branch (`docs.repo` in `forge.toml`, rendered by
+`modules/forge-node`). There is no build step and no second copy: a git
+push that changes a file under `docs/` is a docs deploy, replicated to every
+POP with the repository. Markdown and gemtext render inline with relative
+links rebased, so the same files read correctly on GitHub, in a clone and on
+the site; the index is `docs/README.md`. Only a public repository can be the
+documentation source, whoever is asking.

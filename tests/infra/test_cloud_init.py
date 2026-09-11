@@ -94,6 +94,7 @@ def render_toml():
             "metadata_leader": "ewr1",
             "announcer": "",
             "control_listen": "[fd42::1]:9200",
+            "docs_repo": "jdb/forge",
         },
         {},
     )

@@ -39,6 +39,7 @@ type Config struct {
 	Metrics Metrics `toml:"metrics"`
 	Cluster Cluster `toml:"cluster"`
 	Health  Health  `toml:"health"`
+	Docs    Docs    `toml:"docs"`
 }
 
 // Health configures self-checks and anycast announcement control.
@@ -139,6 +140,18 @@ type Limits struct {
 	MaxChangeCommits int `toml:"max_change_commits"`
 }
 
+// Docs publishes a directory of a public repository hosted on this forge as
+// the site documentation at /docs/. Publishing is a git push to that
+// repository (docs/dogfooding.md).
+type Docs struct {
+	// Repo is the "owner/name" of the public repository; empty disables /docs/.
+	Repo string `toml:"repo"`
+	// Path is the subdirectory to publish; "" publishes the repository root.
+	Path string `toml:"path"`
+	// Ref is the branch or tag to read; empty = the repository's default branch.
+	Ref string `toml:"ref"`
+}
+
 // Metrics configures the Prometheus endpoint (HTTP, private network only).
 type Metrics struct {
 	// Listen is the address for /metrics; empty disables. Bind it to a
@@ -237,6 +250,7 @@ func Default(dataDir string) *Config {
 			SyncInterval: Duration{10 * time.Second},
 		},
 		Health: Health{Interval: Duration{10 * time.Second}},
+		Docs:   Docs{Path: "docs"},
 	}
 }
 
@@ -312,6 +326,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Cluster.Enabled && c.Cluster.ControlListen == "" {
 		errs = append(errs, errors.New("cluster.control_listen is required when cluster.enabled"))
+	}
+	if c.Docs.Repo != "" {
+		owner, name, ok := strings.Cut(c.Docs.Repo, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			errs = append(errs, errors.New("docs.repo must be \"owner/name\""))
+		}
+	}
+	if strings.HasPrefix(c.Docs.Path, "/") || c.Docs.Path == ".." || strings.HasPrefix(c.Docs.Path, "../") || strings.Contains(c.Docs.Path, "/../") {
+		errs = append(errs, errors.New("docs.path must be a relative path inside the repository"))
 	}
 	return errors.Join(errs...)
 }

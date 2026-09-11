@@ -1,6 +1,7 @@
 package web
 
 import (
+	"path"
 	"regexp"
 	"strings"
 
@@ -137,7 +138,26 @@ func resolveLink(target, base string) string {
 	if strings.HasPrefix(target, "#") {
 		return ""
 	}
-	return sanitizeURL(base + target)
+	return sanitizeURL(cleanRelative(base + target))
+}
+
+// cleanRelative normalises "." and ".." segments of a site-absolute path so
+// that "../other.md" links between documents resolve to their canonical URL
+// (the request parser refuses dot segments). A trailing slash and any
+// query or fragment survive; anything else is returned unchanged.
+func cleanRelative(u string) string {
+	if !strings.HasPrefix(u, "/") {
+		return u
+	}
+	rest := ""
+	if i := strings.IndexAny(u, "?#"); i >= 0 {
+		u, rest = u[:i], u[i:]
+	}
+	clean := path.Clean(u)
+	if strings.HasSuffix(u, "/") && clean != "/" {
+		clean += "/"
+	}
+	return clean + rest
 }
 
 func sanitizeURL(u string) string {

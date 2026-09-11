@@ -17,6 +17,9 @@ complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 | `node` | `local` | node name, unique in the deployment; stamped on events, used for leadership. Override: `FORGE_NODE` |
 | `hostname` | `localhost` | public service name used in generated `gemini://`, `titan://` and clone URLs; the first SAN of a generated certificate. Any SNI is still served |
 | `title` | `forge` | name shown on pages and feed titles |
+| `docs.repo` | (empty) | `owner/name` of a **public** repository on this forge whose `docs.path` directory is published as the documentation site at `/docs/`; empty disables it. A git push to that repository updates the site |
+| `docs.path` | `docs` | subdirectory of `docs.repo` to publish (`""` = the repository root) |
+| `docs.ref` | (empty) | branch or tag to read; empty = the repository's default branch |
 | `data_dir` | `/var/lib/forge` | database, repositories, assets, tmp, TLS and SSH identities. Override: `FORGE_DATA_DIR` |
 | `log_level` | `info` | `debug`, `info`, `warn`, `error`. Override: `FORGE_LOG_LEVEL` |
 | `log_format` | `text` | `text` or `json` (slog to stderr, i.e. the journal) |

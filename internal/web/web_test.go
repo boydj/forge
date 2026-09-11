@@ -170,8 +170,11 @@ func (h *harness) seedRepo(user, name string) {
 	_ = os.MkdirAll(work, 0o755)
 	run("init", "-q", "-b", "main")
 	_ = os.WriteFile(filepath.Join(work, "README.md"), []byte("# Hello\n\nSee [docs](docs/a.md) and =>injected\n"), 0o644)
-	_ = os.MkdirAll(filepath.Join(work, "docs"), 0o755)
+	_ = os.MkdirAll(filepath.Join(work, "docs", "guide"), 0o755)
 	_ = os.WriteFile(filepath.Join(work, "docs", "a.md"), []byte("a\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(work, "docs", "README.md"), []byte("# Manual\n\nRead [a](a.md) and [ops](guide/ops.md).\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(work, "docs", "guide", "ops.md"), []byte("# Ops\n\nBack to [index](../README.md).\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(work, "docs", "guide", "notes.txt"), []byte("plain\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(work, "evil.txt"), []byte("=> gemini://evil/ click\n```\n# heading\n"), 0o644)
 	run("add", ".")
 	run("commit", "-qm", "first")
@@ -583,5 +586,51 @@ func TestReleasesAndSettings(t *testing.T) {
 	}
 	if status, _, _ := h.get(h.url("/~alice/proj/"), &alice, ""); status != 51 {
 		t.Errorf("deleted repo visible: %d", status)
+	}
+}
+
+func TestDocs(t *testing.T) {
+	h := newHarness(t)
+	h.seedRepo("alice", "proj")
+	// Unconfigured: nothing is published.
+	if status, _, _ := h.get(h.url("/docs/"), nil, ""); status != 51 {
+		t.Fatalf("unconfigured /docs/: %d", status)
+	}
+	h.f.Config.Docs.Repo = "alice/proj"
+	cases := []struct {
+		path   string
+		status int
+		want   []string
+	}{
+		{"/", 20, []string{"=> /docs/ documentation"}},
+		{"/docs", 31, nil},
+		{"/docs/", 20, []string{"# Manual", "=> /docs/a.md a", "=> /docs/guide/ops.md ops", "## Contents", "=> /docs/guide/ guide/", "=> /docs/a.md a.md", "=> /~alice/proj/tree/main/docs/ source of these pages"}},
+		{"/docs/guide", 31, nil},
+		{"/docs/guide/", 20, []string{"# Documentation: guide", "=> /docs/ ..", "=> /docs/guide/ops.md ops.md", "=> /docs/guide/notes.txt notes.txt"}},
+		{"/docs/guide/ops.md", 20, []string{"# Ops", "=> /docs/README.md index", "=> /docs/guide/ documentation index", "=> /~alice/proj/tree/main/docs/guide/ops.md source of this page"}},
+		{"/docs/guide/notes.txt", 20, []string{"```notes.txt\nplain\n```"}},
+		{"/docs/nope.md", 51, nil},
+		{"/docs/nope/", 51, nil},
+	}
+	for _, c := range cases {
+		status, meta, body := h.get(h.url(c.path), nil, "")
+		if status != c.status {
+			t.Errorf("%s: status %d %q, want %d\n%s", c.path, status, meta, c.status, body)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(body, w) {
+				t.Errorf("%s: missing %q in:\n%s", c.path, w, body)
+			}
+		}
+	}
+	// A private repository never publishes, whoever asks.
+	u, _ := h.f.Store.UserByName(context.Background(), "alice")
+	if _, err := h.f.CreateRepo(context.Background(), u, forge.CreateRepoOptions{Name: "secret", Private: true}); err != nil {
+		t.Fatal(err)
+	}
+	h.f.Config.Docs.Repo = "alice/secret"
+	if status, _, _ := h.get(h.url("/docs/"), nil, ""); status != 51 {
+		t.Errorf("private docs repo: %d, want 51", status)
 	}
 }

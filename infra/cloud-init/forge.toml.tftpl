@@ -38,6 +38,13 @@ listen = "${metrics_listen}"
 announcer     = "${announcer}"
 interval      = "10s"
 
+[docs]
+# The documentation site at /docs/: the docs/ directory of a public
+# repository hosted on this forge, rendered at its default branch. Publishing
+# is a git push to that repository (docs/dogfooding.md). Empty = no /docs/.
+repo = "${docs_repo}"
+path = "docs"
+
 [cluster]
 enabled         = ${cluster_enabled}
 control_listen  = "${control_listen}"

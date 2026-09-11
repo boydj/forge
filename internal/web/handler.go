@@ -295,6 +295,8 @@ func (h *Handler) route(req *request) {
 		h.feedAll(req, true)
 	case segs[0] == "status" && len(segs) == 1:
 		h.status(req)
+	case segs[0] == "docs":
+		h.docs(req, segs[1:], strings.HasSuffix(path, "/"))
 	case segs[0] == "new" && len(segs) == 1:
 		h.newRepo(req)
 	case segs[0] == "account":

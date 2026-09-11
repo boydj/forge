@@ -113,3 +113,9 @@ variable "control_port" {
   type        = number
   default     = 9200
 }
+
+variable "docs_repo" {
+  description = "Repository whose docs/ is the documentation site at /docs/ (the forge dogfoods its own source)."
+  type        = string
+  default     = "jdb/forge"
+}

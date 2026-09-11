@@ -40,6 +40,7 @@ locals {
     cluster_peers_toml = join("\n", [for n, a in var.cluster_peers : "${n} = \"${a}\""])
     metadata_leader    = var.metadata_leader
     announcer          = var.bgp_announce ? "/usr/local/bin/forge-bgp-request" : ""
+    docs_repo          = var.docs_repo
   })
 
   cloud_init = templatefile("${local.repo_root}/infra/cloud-init/node.yaml.tftpl", {

@@ -29,6 +29,7 @@ module "node" {
   metadata_leader  = var.metadata_leader
   control_port     = var.control_port
   bgp_announce     = each.value.bgp_announce
+  docs_repo        = var.docs_repo
 
   operator_ssh_public_keys = coalesce(
     var.operator_ssh_public_keys,

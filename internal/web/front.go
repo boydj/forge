@@ -24,6 +24,9 @@ func (h *Handler) front(req *request) {
 		p.Link("/account", "sign in or register with a client certificate")
 	}
 	p.Link("/feed", "activity feed")
+	if h.F.Config.Docs.Repo != "" {
+		p.Link("/docs/", "documentation")
+	}
 	p.Blank()
 	repos, err := h.F.Store.ListRepos(req.ctx, store.RepoListOptions{Viewer: req.id.UserID(), Limit: 30})
 	if err != nil {

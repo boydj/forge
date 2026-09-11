@@ -133,3 +133,14 @@ variable "metadata_leader" {
   type        = string
   default     = ""
 }
+
+variable "docs_repo" {
+  description = "Public repository (owner/name) on this forge whose docs/ directory is published at /docs/ (forge.toml docs.repo). Empty = no documentation site."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.docs_repo == "" || can(regex("^[a-z0-9._-]+/[a-z0-9._-]+$", var.docs_repo))
+    error_message = "docs_repo must be \"owner/name\" or empty."
+  }
+}
