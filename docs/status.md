@@ -12,8 +12,9 @@ administrator.** M9 (a second provider) was evaluated and deferred: none of
 the 29 North America BGP VPS providers is fully code-driven
 (`docs/research/na-bgp-providers.md`), so Vultr stays the sole upstream.
 Current work: the documentation site (`/docs/`, done), the fleet status
-page (`/status/`, done), the monitoring host `mon1` as code (done, not yet created) and git
-push forwarding from replicas to the leader (done, not yet deployed). Hardening
+page (`/status/`, done), the monitoring host `mon1` (live: Prometheus, blackbox, Grafana, scraping
+every POP over the mesh) and git push forwarding from replicas to the
+leader (deployed). Hardening
 (security review, failure injection, load, interop), M11 Mercurial
 prototype and M6 desired state are done.
 
@@ -139,17 +140,16 @@ Remaining operator actions:
 
 ## Next executable work
 
-1. Deploy the documentation site and status page to the three POPs
-   (`docs/runbooks/upgrade-and-rollback.md`), after `tofu apply` in
-   `infra/opentofu/environments/dev` refreshes the rendered `forge.toml`
-   outputs (the `[docs]` block; outputs only, no resource change).
-2. Monitoring host `mon1` (`docs/monitoring.md`, runbook
-   `deploy-monitor.md` once merged): one `vc2-1c-1gb` in a region without a
-   POP, mesh member, Prometheus + blackbox + Grafana; bird_exporter and port
-   9324 on the POPs via `deploy sysupdate`. Alert destination still to be
-   chosen (alerts visible in the Prometheus UI until then).
-3. Deploy git push forwarding (same rollout as item 1): a push landing on
-   a replica is relayed to the leader over the control plane.
+1. Alerting: choose an Alertmanager destination (email or webhook) and set
+   `alertmanager_targets` for mon1 (`docs/monitoring.md`); alerts are
+   visible in the Prometheus UI (`ssh -L 9090:127.0.0.1:9090 -p 2200
+   deploy@mon1.nodes.as215520.net`) until then. Change Grafana's admin
+   password (`ssh -L 3000:127.0.0.1:3000`).
+2. mon1's host key was pinned by trust-on-first-use (no console read);
+   compare `SHA256:TI0KTTznos+sfxfYv27QYXuyWjrREgEDmESQt4cpgX8` with the
+   Vultr console once.
+3. The user guide (`docs/site/`, live at `/docs/`) is deliberately short;
+   extend it only with how-to material.
 4. IPv4 /24 anycast reachability is uneven from some networks (no ROA
    possible, ADR 0013; observed a Cogent/Marseille detour). The IPv6 /48
    anycast is clean; mon1's blackbox probes will quantify it.
