@@ -43,6 +43,7 @@ type Handler struct {
 	limiter rateLimiter
 	secret  []byte
 	titleCache
+	alertCache alertCache
 }
 
 // Forwarder is implemented by the replication node.

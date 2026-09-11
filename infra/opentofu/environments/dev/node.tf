@@ -2,6 +2,10 @@
 # only render templates, so `tofu plan` shows the cloud-init even with
 # create_node = false.
 locals {
+  # The first monitor's Prometheus over the mesh, for the /status/alerts feed
+  # (monitor-node binds 9090 on wg0 and admits it from the mesh).
+  prometheus_url = length(var.monitors) > 0 ? "http://[${split("/", values(var.monitors)[0].wg_address)[0]}]:9090" : ""
+
   # Cluster peers of each POP: every other POP's control address over WireGuard.
   cluster_peers = {
     for name, p in var.pops : name => {
@@ -30,6 +34,7 @@ module "node" {
   control_port     = var.control_port
   bgp_announce     = each.value.bgp_announce
   docs_repo        = var.docs_repo
+  prometheus_url   = local.prometheus_url
 
   operator_ssh_public_keys = coalesce(
     var.operator_ssh_public_keys,

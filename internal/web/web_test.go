@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"os/exec"
@@ -727,5 +729,61 @@ func TestMarkdownTable(t *testing.T) {
 	want := "Intro.\n\n```table\nPage         Path\nFront        /\nA user page  /~user/\n```\n=> /~u/ user [readme link]\n\nAfter.\n\n"
 	if got != want {
 		t.Errorf("table rendering:\n got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestAlertsFeed(t *testing.T) {
+	h := newHarness(t)
+	// Unconfigured: a valid empty feed, and no line on the status page.
+	if status, _, body := h.get(h.url("/status/alerts"), nil, ""); status != 20 || !strings.Contains(body, "Alerts are not configured on this node.") {
+		t.Fatalf("unconfigured: %d\n%s", status, body)
+	}
+	if _, _, body := h.get(h.url("/status/"), nil, ""); strings.Contains(body, "## Alerts") {
+		t.Fatalf("status page shows alerts without a source:\n%s", body)
+	}
+	// A stub Prometheus: one firing, one pending (ignored).
+	prom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/alerts" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"status":"success","data":{"alerts":[
+		 {"labels":{"alertname":"DiskLow","pop":"sgp1","node":"sgp1","severity":"warn"},"annotations":{"summary":"sgp1 has 1.2GiB free on the data filesystem","description":"Below 2 GiB.","runbook":"docs/operations.md"},"state":"firing","activeAt":"2026-09-11T21:39:05.123Z","value":"1e+09"},
+		 {"labels":{"alertname":"NodeHighCPU","pop":"ams1"},"annotations":{"summary":"cpu"},"state":"pending","activeAt":"2026-09-11T22:00:00Z","value":"0.95"}]}}`)
+	}))
+	defer prom.Close()
+	h.f.Config.Status.PrometheusURL = prom.URL
+	status, _, body := h.get(h.url("/status/alerts"), nil, "")
+	if status != 20 {
+		t.Fatalf("/status/alerts: %d\n%s", status, body)
+	}
+	id := alertID(map[string]string{"alertname": "DiskLow", "pop": "sgp1", "node": "sgp1", "severity": "warn"})
+	for _, w := range []string{"# forge alerts", "=> /status/alerts/" + id + " 2026-09-11 - FIRING DiskLow on sgp1: sgp1 has 1.2GiB free on the data filesystem"} {
+		if !strings.Contains(body, w) {
+			t.Errorf("missing %q in:\n%s", w, body)
+		}
+	}
+	if strings.Contains(body, "NodeHighCPU") {
+		t.Errorf("pending alert listed:\n%s", body)
+	}
+	status, _, body = h.get(h.url("/status/alerts/"+id), nil, "")
+	if status != 20 || !strings.Contains(body, "# FIRING DiskLow on sgp1") || !strings.Contains(body, "Firing since 2026-09-11 21:39 UTC") || !strings.Contains(body, "* alertname = DiskLow") || !strings.Contains(body, "Runbook: docs/operations.md") {
+		t.Errorf("alert page: %d\n%s", status, body)
+	}
+	if status, _, body := h.get(h.url("/status/alerts/nope"), nil, ""); status != 20 || !strings.Contains(body, "no longer firing") {
+		t.Errorf("unknown alert: %d\n%s", status, body)
+	}
+	status, meta, body := h.get(h.url("/status/alerts/atom.xml"), nil, "")
+	if status != 20 || !strings.HasPrefix(meta, "application/atom+xml") || !strings.Contains(body, "<title>FIRING DiskLow on sgp1: sgp1 has 1.2GiB free on the data filesystem</title>") || !strings.Contains(body, "<updated>2026-09-11T21:39:05Z</updated>") {
+		t.Errorf("atom: %d %s\n%s", status, meta, body)
+	}
+	if _, _, body := h.get(h.url("/status/"), nil, ""); !strings.Contains(body, "## Alerts\n1 firing.\n=> /status/alerts alerts feed") {
+		t.Errorf("status page alerts line:\n%s", body)
+	}
+	// Source gone: the feed still answers 20 with the last known state.
+	prom.Close()
+	h.h.alertCache.fetched = time.Time{}
+	if status, _, body := h.get(h.url("/status/alerts"), nil, ""); status != 20 || !strings.Contains(body, "Alert source unreachable") || !strings.Contains(body, "FIRING DiskLow") {
+		t.Errorf("unreachable source: %d\n%s", status, body)
 	}
 }

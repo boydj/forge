@@ -14,6 +14,7 @@ for an Atom feed.
 | One change | `/~user/repo/changes/<n>/feed` |
 | Its releases | `/~user/repo/releases/feed` |
 | Service incidents | `/status/feed` |
+| Monitoring alerts | `/status/alerts` |
 
 Private repositories appear only when you subscribe with your certificate
 selected.

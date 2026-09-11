@@ -94,6 +94,12 @@ func (h *Handler) statusRoutes(req *request, rest []string, trailing bool) {
 		h.incidentFeed(req, false)
 	case len(rest) == 1 && rest[0] == "atom.xml":
 		h.incidentFeed(req, true)
+	case rest[0] == "alerts" && len(rest) == 1:
+		h.alertFeed(req, false)
+	case rest[0] == "alerts" && len(rest) == 2 && rest[1] == "atom.xml":
+		h.alertFeed(req, true)
+	case rest[0] == "alerts" && len(rest) == 2:
+		h.alertPage(req, rest[1])
 	default:
 		_ = gemini.NotFound(req.w)
 	}
@@ -198,6 +204,20 @@ func (h *Handler) statusPage(req *request) {
 	}
 	p.Blank()
 
+	if h.F.Config.Status.PrometheusURL != "" {
+		p.Heading(2, "Alerts")
+		alerts, err := h.alerts(req.ctx)
+		switch {
+		case err != nil:
+			p.Text("Alert source unreachable.")
+		case len(alerts) == 0:
+			p.Text("None firing.")
+		default:
+			p.Text(fmt.Sprintf("%d firing.", len(alerts)))
+		}
+		p.Link("/status/alerts", "alerts feed")
+		p.Blank()
+	}
 	p.Heading(2, "Recent incidents")
 	incidents := h.incidents(req.ctx, 10)
 	if len(incidents) == 0 {

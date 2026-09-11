@@ -120,6 +120,14 @@ simply never starts it.
 - The monitoring host needs the mesh (scrapes) but not BGP, no anycast
   addresses and no public service, so its firewall is simpler than a POP's.
 
+**Alert delivery** is the `/status/alerts` gemfeed: every forge node reads
+`GET /api/v1/alerts` from this Prometheus over the mesh
+(`status.prometheus_url` in `forge.toml`, rendered by `modules/forge-node`
+from the first entry of the `monitors` map) and serves the firing alerts as
+a feed the operator subscribes to in their Gemini client
+(`docs/operations.md`, "Status page"). No Alertmanager is deployed;
+`alertmanager_targets` stays available for a push channel later.
+
 Cost in `docs/costs.md` terms: one `vc2-1c-1gb` at **$5.00/month** (or
 `vhp-1c-1gb-intel` at $6.00 for NVMe), 25 GB of disk, of which Prometheus
 needs about 2 GB per 90 days at this cardinality (roughly 3,000 series at

@@ -20,6 +20,7 @@ complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 | `docs.repo` | (empty) | `owner/name` of a **public** repository on this forge whose `docs.path` directory is published as the documentation site at `/docs/`; empty disables it. A git push to that repository updates the site |
 | `docs.path` | `docs` | subdirectory of `docs.repo` to publish (`""` = the repository root) |
 | `docs.ref` | (empty) | branch or tag to read; empty = the repository's default branch |
+| `status.prometheus_url` | (empty) | base URL of the monitoring host's Prometheus over the control network (`http://[<mon1 wg address>]:9090`); its firing alerts are served as the `/status/alerts` gemfeed and counted on `/status/`. Empty disables the feed |
 | `docs.incidents` | `incidents` | subdirectory of `docs.path` holding incident reports (`YYYY-MM-DD-slug.md`) for the status page and its feeds; `""` disables the list |
 | `data_dir` | `/var/lib/forge` | database, repositories, assets, tmp, TLS and SSH identities. Override: `FORGE_DATA_DIR` |
 | `log_level` | `info` | `debug`, `info`, `warn`, `error`. Override: `FORGE_LOG_LEVEL` |
@@ -224,7 +225,13 @@ the health controller's verdict, the announcement state, each check's
 result, the process start time and the replication lag. A single node
 without a cluster shows itself. The page needs no monitoring host and
 degrades to "unreachable since <time>" for a peer that stops answering.
-The `/status` probe (no trailing slash) is unchanged.
+`/status/alerts` is a gemfeed of the alerts currently firing on the
+monitoring host's Prometheus (`status.prometheus_url`, read over the mesh
+and cached 30 s), with `/status/alerts/atom.xml` and one page per alert
+(`/status/alerts/<id>`, labels and annotations while it fires). An alert
+is an entry while it fires and disappears when it resolves; subscribing
+to the feed is the alert channel, no Alertmanager involved. The `/status`
+probe (no trailing slash) is unchanged.
 
 ## Maintenance, purge and quotas
 

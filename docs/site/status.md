@@ -3,7 +3,8 @@
 `/status/` shows whether the forge is healthy: one line per point of
 presence, each component, and the most recent incident reports. Subscribe
 to incidents at `/status/feed`; maintenance and key rotations are
-announced there.
+announced there. `/status/alerts` is the live list of monitoring alerts,
+also a feed you can subscribe to.
 
 The service is anycast: you reach the nearest point of presence and all
 of them serve everything.

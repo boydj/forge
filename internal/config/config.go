@@ -40,6 +40,7 @@ type Config struct {
 	Cluster Cluster `toml:"cluster"`
 	Health  Health  `toml:"health"`
 	Docs    Docs    `toml:"docs"`
+	Status  Status  `toml:"status"`
 }
 
 // Health configures self-checks and anycast announcement control.
@@ -154,6 +155,14 @@ type Docs struct {
 	// YYYY-MM-DD-slug.md; the status page lists the newest and serves them
 	// as a feed. "" disables the list.
 	Incidents string `toml:"incidents"`
+}
+
+// Status configures the fleet status page's alert source.
+type Status struct {
+	// PrometheusURL is the base URL of the monitoring host's Prometheus over
+	// the control network (e.g. "http://[fda5:...::fa]:9090"); its firing
+	// alerts are served as the /status/alerts gemfeed. Empty disables it.
+	PrometheusURL string `toml:"prometheus_url"`
 }
 
 // Metrics configures the Prometheus endpoint (HTTP, private network only).
@@ -330,6 +339,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Cluster.Enabled && c.Cluster.ControlListen == "" {
 		errs = append(errs, errors.New("cluster.control_listen is required when cluster.enabled"))
+	}
+	if u := c.Status.PrometheusURL; u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		errs = append(errs, errors.New("status.prometheus_url must start with http:// or https://"))
 	}
 	if c.Docs.Repo != "" {
 		owner, name, ok := strings.Cut(c.Docs.Repo, "/")

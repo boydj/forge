@@ -42,6 +42,7 @@ locals {
     metadata_leader    = var.metadata_leader
     announcer          = var.bgp_announce ? "/usr/local/bin/forge-bgp-request" : ""
     docs_repo          = var.docs_repo
+    prometheus_url     = var.prometheus_url
   })
 
   cloud_init = templatefile("${local.repo_root}/infra/cloud-init/node.yaml.tftpl", {

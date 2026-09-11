@@ -45,6 +45,11 @@ interval      = "10s"
 repo = "${docs_repo}"
 path = "docs/site"
 
+[status]
+# The monitoring host's Prometheus over WireGuard (docs/monitoring.md); its
+# firing alerts become the /status/alerts gemfeed. Empty = no alerts feed.
+prometheus_url = "${prometheus_url}"
+
 [cluster]
 enabled         = ${cluster_enabled}
 control_listen  = "${control_listen}"

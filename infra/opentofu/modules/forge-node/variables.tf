@@ -144,3 +144,14 @@ variable "docs_repo" {
     error_message = "docs_repo must be \"owner/name\" or empty."
   }
 }
+
+variable "prometheus_url" {
+  description = "Base URL of the monitoring host's Prometheus over the control network (forge.toml status.prometheus_url); its firing alerts are served as the /status/alerts gemfeed. Empty = no alerts feed."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.prometheus_url == "" || can(regex("^https?://", var.prometheus_url))
+    error_message = "prometheus_url must be empty or start with http:// or https://."
+  }
+}

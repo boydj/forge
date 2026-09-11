@@ -95,6 +95,7 @@ def render_toml():
             "announcer": "",
             "control_listen": "[fd42::1]:9200",
             "docs_repo": "jdb/forge",
+            "prometheus_url": "http://[fd42::fa]:9090",
         },
         {},
     )
