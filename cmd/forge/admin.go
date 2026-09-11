@@ -43,10 +43,28 @@ func runAdmin(args []string) error {
 	fs := flag.NewFlagSet("admin", flag.ContinueOnError)
 	cfgPath := fs.String("config", envOr("FORGE_CONFIG", ""), "configuration file")
 	fs.Usage = adminUsage
-	if err := fs.Parse(args); err != nil {
+	// --config may appear anywhere ("forge admin backup --config X --out Y"
+	// is what units and docs naturally write); lift it out before parsing.
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--config" || args[i] == "-config":
+			if i+1 < len(args) {
+				_ = fs.Set("config", args[i+1])
+				i++
+			}
+		case strings.HasPrefix(args[i], "--config="):
+			_ = fs.Set("config", strings.TrimPrefix(args[i], "--config="))
+		case strings.HasPrefix(args[i], "-config="):
+			_ = fs.Set("config", strings.TrimPrefix(args[i], "-config="))
+		default:
+			rest = append(rest, args[i])
+		}
+	}
+	if err := fs.Parse(rest); err != nil {
 		return err
 	}
-	rest := fs.Args()
+	rest = fs.Args()
 	if len(rest) == 0 {
 		adminUsage()
 		return errors.New("command required")

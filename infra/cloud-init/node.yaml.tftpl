@@ -420,7 +420,7 @@ runcmd:
   # forge user and directories (write_files ran before users existed)
   - [install, -d, -m, "0750", -o, forge, -g, forge, /var/lib/forge, /var/lib/forge/tls, /var/lib/forge/ssh]
   - [install, -d, -m, "0750", -o, root, -g, forge, /etc/forge]
-  - [install, -d, -m, "0700", /var/backups/forge]
+  - [install, -d, -m, "0700", -o, forge, -g, forge, /var/backups/forge]
   - [chgrp, forge, /etc/forge/forge.toml]
   # node age identity: generated here, never leaves the machine. The public
   # half is what `scripts/deploy init-node` collects into infra/secrets/nodes/.

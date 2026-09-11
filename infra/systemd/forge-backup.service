@@ -10,7 +10,10 @@ ConditionPathExists=/etc/forge/forge.toml
 
 [Service]
 Type=oneshot
-User=root
+# Runs as forge: NoNewPrivileges forbids runuser/setuid, and the snapshot
+# reads the forge-owned data directory anyway.
+User=forge
+Group=forge
 ExecStart=/usr/local/bin/forge-backup
 # backup recipient (public) comes from the tmpfs secrets directory (SR-02)
 Environment=RECIPIENT_FILE=/run/forge/secrets/backup.recipient

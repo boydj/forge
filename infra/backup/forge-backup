@@ -40,9 +40,9 @@ final="$OUT_DIR/$stamp.tar.gz.age"
 log "creating $plain"
 # Run the export as the forge user so the data directory permissions stay intact.
 if [ "$(id -u)" = 0 ]; then
-  runuser -u forge -- forge admin backup --config "$CONFIG" --out "$plain"
+  runuser -u forge -- forge admin --config "$CONFIG" backup --out "$plain"
 else
-  forge admin backup --config "$CONFIG" --out "$plain"
+  forge admin --config "$CONFIG" backup --out "$plain"
 fi
 [ -s "$plain" ] || die "backup produced an empty file"
 

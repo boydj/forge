@@ -83,7 +83,7 @@ func TestGeminiCheck(t *testing.T) {
 	if err := GeminiCheck(addr, "forge.test").Run(ctx); err != nil {
 		t.Fatalf("gemini check: %v", err)
 	}
-	if len(*lines) != 1 || (*lines)[0] != "gemini://forge.test/status\r\n" {
+	if len(*lines) != 1 || (*lines)[0] != "gemini://forge.test/\r\n" {
 		t.Fatalf("request lines = %q", *lines)
 	}
 
