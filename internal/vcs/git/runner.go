@@ -282,9 +282,13 @@ func (b *Backend) Init(ctx context.Context, path, defaultBranch string) error {
 	}
 	// Repository-local settings that transport commands read from the
 	// repository config. These are ours: users cannot modify this file.
+	// core.sharedRepository is deliberately NOT set: the forge user owns
+	// every repository and no group sharing is wanted, and setting it makes
+	// git add the setgid bit to new directories via chmod, which the
+	// forge.service sandbox blocks (RestrictSUIDSGID=yes) and which then
+	// breaks reflog directory creation on push.
 	for _, kv := range [][2]string{
 		{"core.logAllRefUpdates", "true"},
-		{"core.sharedRepository", "0640"},
 		{"gc.reflogExpire", "90 days"},
 		{"gc.reflogExpireUnreachable", "30 days"},
 	} {

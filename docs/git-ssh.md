@@ -237,3 +237,18 @@ subsystem) and the Go SSH client (channel/request refusals, second exec,
 session timeout, connection limits, handshake timeout). The `ssh`-based
 tests skip when the binary is absent. `ParseCommand` has a table test with
 valid forms and injection, option, traversal, unicode and length cases.
+
+## Notes learned in production
+
+- Repositories are initialised **without** `core.sharedRepository`. The forge
+  user owns every repo and no group sharing is wanted; setting it makes git
+  add the setgid bit to new directories with `chmod`, which the hardened
+  `forge.service` (`RestrictSUIDSGID=yes`) blocks, breaking reflog directory
+  creation on the first push. `forge admin maintenance` unsets it on any
+  older repository.
+- Under anycast, a `git push` can land on a replica, which refuses it and
+  names the leader (single-writer, ADR 0011): `forbidden: pushes for this
+  repository are accepted by node <leader>`. Retrying reaches the leader
+  once routing settles, or push to the leader's unicast name
+  (`<leader>.nodes.<zone>`, same host key). Automatic push forwarding is
+  future work.

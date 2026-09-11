@@ -60,6 +60,8 @@ done.
   exported from both nodes. DNS: `<pop>.nodes.as215520.net`,
   `git.as215520.net` A/AAAA on the anycast addresses, SSHFP.
 - Local: `make run` serves gemini://localhost:1965/ and ssh://localhost:2222.
+- **Dogfooding**: this repository is hosted on the forge as `jdb/forge`
+  (leader ewr1, replicated to ams1); browse gemini://git.as215520.net/~jdb/forge/.
 
 ## Tests passing
 
@@ -120,7 +122,8 @@ Remaining operator actions:
 ## Next executable work
 
 1. M9: second provider module (`infra/opentofu/modules/<provider>-pop`) with the same outputs as vultr-pop; candidates in `docs/research/vultr.md` section 11.
-2. Dogfooding: push this repository to the forge (`docs/dogfooding.md`) now that two POPs replicate.
+2. IPv4 /24 anycast reachability is uneven from some networks (no ROA possible, ADR 0013; observed a Cogent/Marseille detour). The IPv6 /48 anycast is clean. Monitor and consider a covering-route or upstream fix.
+3. Git push over anycast can hit a replica (rejected with the leader name); automatic push forwarding is future work.
 2. M6: RIPE objects, rDNS, DS, PeeringDB (operator).
 3. Backup verification on ewr1 (`forge-backup.timer` runs nightly; check `/var/backups/forge`).
 4. M8/M9: second POP, then a second provider module (`infra/opentofu/modules/<provider>-pop`).

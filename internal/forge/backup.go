@@ -263,6 +263,9 @@ func (f *Forge) Maintain(ctx context.Context, check bool) (map[string]int, error
 			stats["missing"]++
 			continue
 		}
+		// Repos created before the sharedRepository fix carry a setgid-bit
+		// config that RestrictSUIDSGID blocks on push; unset it (best effort).
+		_, _ = f.Git.Command(ctx, repo.Path(), "config", "--unset", "core.sharedRepository").Output()
 		cmd := f.Git.Command(ctx, repo.Path(), "-c", "gc.auto=6700", "-c", "gc.reflogExpireUnreachable=now", "gc", "--auto", "--quiet")
 		if outb, err := cmd.CombinedOutput(); err != nil {
 			f.Log.Warn("gc failed", "repo", r.Owner+"/"+r.Name, "err", err, "out", string(outb))
