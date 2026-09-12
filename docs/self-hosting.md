@@ -137,8 +137,8 @@ Other verbs: `rollback <pop>` (swap `forge.prev` back), `drain <pop>` /
 /run/forge/secrets/             tls/server.{key,crt} ssh/host_ed25519 cluster.secret wg.key bgp.password backup.recipient
 /etc/forge/age.key              node identity (never leaves the node); age.pub = recipient
 /var/lib/forge/                 forge.db, repos/, assets/, tmp/ (forge:forge 0750)
-/var/backups/forge/             <stamp>.tar.zst.age (forge-backup.timer, daily)
-/etc/nftables.conf              input drop; 22/1965 public, 2200 rate-limited, 51820, 9100/9101/9200 wg0-only
+/var/backups/forge/             <stamp>.tar.gz.age (forge-backup.timer, daily; forge:forge 0700)
+/etc/nftables.conf              input drop; 22/1965 public, 2200 rate-limited, 51820, 9100/9101/9200/9324 wg0-only
 /etc/systemd/system/forge*.service|timer
 /etc/bird/bird.conf, state.conf ; /etc/wireguard/wg0.conf     (anycast only)
 ```

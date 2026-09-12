@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"mime"
 	"net"
 	"os"
 	"path/filepath"
@@ -31,6 +32,8 @@ func adminUsage() {
   repo delete OWNER/NAME | repo restore OWNER/NAME | repo check OWNER/NAME | repo size OWNER/NAME
   repo resync OWNER/NAME | repo resync --all | repo move-leader OWNER/NAME NODE
   repo archive OWNER/NAME | repo unarchive OWNER/NAME
+  release create OWNER/NAME --as USER FILE      (FILE: tag, title, notes; the tag must exist)
+  release asset OWNER/NAME TAG --as USER [--mime TYPE] FILE
   announce TEXT | announce --clear      (notice shown on the front page)
   pop status | pop drain | pop undrain
   maintenance [--check]
@@ -101,6 +104,8 @@ func runAdmin(args []string) error {
 		return adminCert(ctx, app, rest[1:])
 	case "repo":
 		return adminRepo(ctx, app, rest[1:])
+	case "release":
+		return adminRelease(ctx, app, rest[1:])
 	case "maintenance":
 		return adminMaintenance(ctx, app, rest[1:])
 	case "backup":
@@ -559,6 +564,100 @@ func adminRepo(ctx context.Context, app *forge.Forge, args []string) error {
 		return nil
 	}
 	return fmt.Errorf("repo: unknown subcommand %q", args[0])
+}
+
+// adminRelease publishes releases from the command line (the release
+// procedure, docs/release-procedure.md) with the same checks as a Titan
+// upload: the acting user must have write access and the tag must exist.
+func adminRelease(ctx context.Context, app *forge.Forge, args []string) error {
+	usage := errors.New("release create OWNER/NAME --as USER FILE | release asset OWNER/NAME TAG --as USER [--mime TYPE] FILE")
+	if len(args) == 0 {
+		return usage
+	}
+	access := func(as, repo string) (*store.User, forge.Access, error) {
+		if as == "" {
+			return nil, forge.Access{}, errors.New("--as USER is required")
+		}
+		owner, name, err := splitRepo(repo)
+		if err != nil {
+			return nil, forge.Access{}, err
+		}
+		u, err := app.Store.UserByName(ctx, as)
+		if err != nil {
+			return nil, forge.Access{}, err
+		}
+		acc, err := app.LookupRepo(ctx, u, owner, name)
+		if err != nil {
+			return nil, forge.Access{}, err
+		}
+		return u, acc, nil
+	}
+	switch args[0] {
+	case "create":
+		fs := flag.NewFlagSet("release create", flag.ContinueOnError)
+		as := fs.String("as", "", "acting user")
+		if err := parseMixed(fs, args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 2 {
+			return usage
+		}
+		u, acc, err := access(*as, fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		text, err := os.ReadFile(fs.Arg(1))
+		if err != nil {
+			return err
+		}
+		rel, err := app.CreateRelease(ctx, u, acc, string(text))
+		if err != nil {
+			return err
+		}
+		fmt.Printf("released %s/%s %s: %s\n", acc.Repo.Owner, acc.Repo.Name, rel.Tag, rel.Title)
+		return nil
+	case "asset":
+		fs := flag.NewFlagSet("release asset", flag.ContinueOnError)
+		as := fs.String("as", "", "acting user")
+		mimeType := fs.String("mime", "", "MIME type (default: by extension, else application/octet-stream)")
+		if err := parseMixed(fs, args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 3 {
+			return usage
+		}
+		u, acc, err := access(*as, fs.Arg(0))
+		if err != nil {
+			return err
+		}
+		rel, err := app.LookupRelease(ctx, acc, fs.Arg(1))
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(fs.Arg(2))
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		st, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		mt := *mimeType
+		if mt == "" {
+			mt = mime.TypeByExtension(filepath.Ext(fs.Arg(2)))
+		}
+		if mt == "" {
+			mt = "application/octet-stream"
+		}
+		a, err := app.AddAsset(ctx, u, acc, rel, filepath.Base(fs.Arg(2)), mt, st.Size(), f)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("attached %s (%d bytes, %s) to %s/%s %s\n", a.Name, a.Size, a.MIME, acc.Repo.Owner, acc.Repo.Name, rel.Tag)
+		return nil
+	}
+	return usage
 }
 
 func adminMaintenance(ctx context.Context, app *forge.Forge, args []string) error {

@@ -31,7 +31,7 @@ titan://host/path;edit\r\n                                (no body)
 | Close | the server writes the status line, then `close_notify`, for early rejections as well |
 
 `size=0` is not treated as a delete anywhere. Non-text uploads (release
-assets) are planned for M3 and will use `limits.max_asset_bytes`.
+assets, any MIME type) are bounded by `limits.max_asset_bytes`.
 
 ## Endpoints
 
@@ -68,11 +68,10 @@ confirmation into an INPUT prompt** (close/reopen with the literal word,
 else that writes goes through Titan, where the client has to build a body
 deliberately. This is threat-model invariant T-19.
 
-Two current exceptions violate the rule and should be fixed:
-`/account/keys/remove/<fingerprint>` removes an SSH key and
-`/account/certs/revoke/<spki>` revokes a certificate on a plain Gemini
-request with no confirmation. Both are limited to the user's own account
-and cannot touch the certificate in use.
+`/account/keys/remove/<fingerprint>` and `/account/certs/revoke/<spki>`
+follow the rule too: both ask the user to type `remove` or `revoke` at an
+INPUT prompt behind an action token, and the certificate in use cannot be
+revoked from its own session.
 
 ## `;edit`
 

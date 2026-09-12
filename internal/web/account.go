@@ -128,8 +128,42 @@ func (h *Handler) accountPage(req *request, u *store.User) {
 	if !req.id.NotAfter.IsZero() {
 		p.Textf("Expires %s", date(req.id.NotAfter))
 	}
+	h.certExpiryNotice(p, req)
 	h.footer(p, req)
 	req.send(p)
+}
+
+// certExpiryWarn is how long before a certificate's NotAfter the account
+// and front pages start warning.
+const certExpiryWarn = 30 * 24 * time.Hour
+
+// certExpiryNotice warns a signed-in user whose certificate expires within
+// certExpiryWarn: an expired certificate is refused everywhere, including
+// /account, so the replacement must be enrolled while this one still works
+// (docs/tls.md).
+func (h *Handler) certExpiryNotice(p *gemini.Page, req *request) {
+	if req.id == nil || req.id.User == nil || req.id.NotAfter.IsZero() {
+		return
+	}
+	left := time.Until(req.id.NotAfter)
+	if left > certExpiryWarn {
+		return
+	}
+	days := int(left.Hours() / 24)
+	var when string
+	switch {
+	case left <= 0:
+		when = "has expired"
+	case days == 0:
+		when = "expires today"
+	case days == 1:
+		when = "expires tomorrow"
+	default:
+		when = fmt.Sprintf("expires in %d days", days)
+	}
+	p.Blank()
+	p.Text(fmt.Sprintf("Warning: your certificate %s (%s). An expired certificate is refused everywhere, including this page. Enrol a new certificate from this device now, or generate a code to enrol another device.", when, date(req.id.NotAfter)))
+	p.Link("/account/certs", "certificates and devices")
 }
 
 func (h *Handler) accountProfile(req *request, u *store.User) {

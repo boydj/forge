@@ -78,8 +78,8 @@ Rules for users:
 - **Expiry** is the client's choice (Lagrange defaults to year 9999). An
   expired certificate gets `62` everywhere, including `/account`, so a
   user must enrol a replacement from another device or use an operator
-  code before it expires. Nothing warns ahead of time yet (planned:
-  account page notice when `NotAfter` is within 30 days).
+  code before it expires. The account page and the front page warn a
+  signed-in user whose certificate expires within 30 days.
 - Do not reuse a TLS identity's key as an SSH key (ADR 0005).
 
 ## Rotating the service certificate

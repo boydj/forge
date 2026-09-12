@@ -28,9 +28,7 @@ the owner's re-push, VM lost, total loss, quarterly restore drill.
 `assets/`, `tls/`, `ssh/` subtrees of the data directory (empty on
 production nodes, whose identities live in `/run/forge/secrets`).
 `forge-backup` wraps it with `age -r <backup recipient>` and names it
-`<stamp>.tar.gz.age`. (`docs/disaster-recovery.md` still says
-`.tar.zst.age`; the script writes `.tar.gz.age`.) `FILE.db` gives a
-database-only snapshot.
+`<stamp>.tar.gz.age`. `FILE.db` gives a database-only snapshot.
 
 ## 0. Get and decrypt the archive (laptop)
 

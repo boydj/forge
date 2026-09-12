@@ -18,6 +18,7 @@ func (h *Handler) front(req *request) {
 		p.Blank()
 	}
 	if req.id != nil && req.id.User != nil {
+		h.certExpiryNotice(p, req)
 		p.Link("/~"+req.id.User.Name+"/", "your repositories")
 		p.Link("/new", "create a repository")
 	} else {

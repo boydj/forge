@@ -787,3 +787,22 @@ func TestAlertsFeed(t *testing.T) {
 		t.Errorf("unreachable source: %d\n%s", status, body)
 	}
 }
+
+func TestCertExpiryNotice(t *testing.T) {
+	h := newHarness(t)
+	// clientCert issues a certificate valid for 24 h: within the warning window.
+	cert := clientCert(t, "alice")
+	if status, meta, _ := h.act("/account/register", &cert, "alice"); status != 30 || meta != "/account" {
+		t.Fatalf("register: %d %s", status, meta)
+	}
+	for _, path := range []string{"/account", "/"} {
+		_, _, body := h.get(h.url(path), &cert, "")
+		if !strings.Contains(body, "Warning: your certificate expires") || !strings.Contains(body, "=> /account/certs certificates and devices") {
+			t.Errorf("%s: no expiry warning in:\n%s", path, body)
+		}
+	}
+	// Anonymous pages never warn.
+	if _, _, body := h.get(h.url("/"), nil, ""); strings.Contains(body, "Warning: your certificate") {
+		t.Errorf("anonymous front page warns")
+	}
+}

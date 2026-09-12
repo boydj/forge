@@ -5,7 +5,8 @@
 # `checked_by_netcheck` with address-plan.yaml (peeringdb:).
 #
 # Observed on 2026-09-10 (public-state.yaml): irr_as_set empty, prefix counts
-# 100/100, no public POCs, three IPv6-only IX entries, website https://as215520.net.
+# 100/100, no public POCs, three IPv6-only IX entries (deleted 2026-09-12),
+# website https://as215520.net. The as-set now exists in the RIPE DB.
 version: 1
 net_id: 35354
 org_id: 37423
@@ -41,8 +42,9 @@ net:
     Anycast hobbynet: one IPv4 /24 (44.32.58.0/24, ARDC 44Net) and one IPv6 /48
     (2a0f:85c1:368::/48) originated from every POP. Services: Gemini/Titan
     (1965) and SSH (22) on git.as215520.net; gemini://git.as215520.net/
-    RPKI ROAs exist for both prefixes at maxLength == prefix length; please
-    drop invalids. IRR: RIPE::AS215520:AS-ALL. Abuse: abuse@unplanks.com.
+    RPKI: ROA for the /48 at maxLength 48 (please drop invalids); the /24 is
+    an ARDC 44Net allocation without a ROA (RPKI not-found by design).
+    IRR: RIPE::AS215520:AS-ALL. Abuse: abuse@unplanks.com.
   allow_ixp_update: true                 # let IXPs push port/IP changes for our netixlan entries
 
 # Public POCs (Contacts tab). Visibility "Public" for all three so route-server
@@ -66,15 +68,13 @@ org:
   zipcode: "20147"
   country: "US"
 
-# IX presences (netixlan). Keep all three; they are live RS sessions
-# (public-state.yaml). None has IPv4 because the /24 was never announced
-# there; add the IPv4 addresses when the IXPs assign them and the /24 is
-# announced from a POP that reaches the IX. Do not add the Vultr POPs as
-# "facilities": Vultr locations are not PeeringDB facilities we occupy.
-ixps_keep:
-  - { ix_id: 3821, name: "BGP.Exchange - London",  ipaddr6: "2a0e:8f01:1000:10::102", speed: 1000, is_rs_peer: true, ipaddr4: null }
-  - { ix_id: 4059, name: "ONIX",                   ipaddr6: "2001:504:125:e1::bba",   speed: 100,  is_rs_peer: true, ipaddr4: null }
-  - { ix_id: 4843, name: "BGP.Exchange - Toronto", ipaddr6: "2a0e:8f01:1000:33::12b", speed: 1000, is_rs_peer: true, ipaddr4: null }
+# IX presences (netixlan): none. The three IPv6-only route-server sessions
+# (BGP.Exchange London and Toronto, ONIX) belonged to the retired Toronto
+# box (AS835 upstream) and were deleted by the operator on 2026-09-12; no
+# POP reaches an IX today (Vultr transit only). Re-add an entry only when a
+# POP actually has a port there. Do not add the Vultr POPs as "facilities":
+# Vultr locations are not PeeringDB facilities we occupy.
+ixps_keep: []
 facilities: []                           # none
 
 checked_by_netcheck: [irr_as_set, info_prefixes4, info_prefixes6, "pocs (public roles Abuse, Technical, Policy)"]

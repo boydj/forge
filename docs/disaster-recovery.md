@@ -2,9 +2,10 @@
 
 What a node's state is, how it is backed up, and how to bring it back in
 each failure scenario using the commands that exist today. Multi-POP
-replication (M5) will add a second line of defence; until then every
-repository has exactly one copy on its leader plus the backups described
-here.
+replication (`docs/replication.md`) keeps a copy of every repository and
+its metadata on every POP; the backups described here are the line of
+defence against a fault that replicates (a bad delete, corruption pushed
+through) and against total loss.
 
 ## State on a node
 
@@ -12,7 +13,7 @@ here.
 | --- | --- | --- |
 | `<data_dir>/forge.db` (+ `-wal`, `-shm`) | all metadata: accounts, certificate and key hashes, repositories, ACLs, issues, comments, events | no: back up |
 | `<data_dir>/repos/<owner>/<repo>.git` | bare repositories (content) | no: back up |
-| `<data_dir>/assets/` | release assets (planned) | no: back up |
+| `<data_dir>/assets/` | release assets | no: back up |
 | `<data_dir>/tls/`, `<data_dir>/ssh/` (dev) or `/run/forge/secrets/` (prod) | service identities | from the SOPS bundle (prod); losing them is a rotation event, see `docs/tls.md` |
 | `<data_dir>/tmp/`, `hooks/`, `hook.sock` | scratch, regenerated at start | yes |
 | `/etc/forge/forge.toml` | configuration | from `tofu output`/`--config-dir` |
@@ -41,25 +42,18 @@ know about, which is harmless, whereas the reverse could reference a push
 whose objects are missing. The `events` table and `repositories.pushed_at`
 are the record of what should exist.
 
-**Recommended nightly job** (what `infra/backup/forge-backup` wraps):
-
-```
-forge admin backup --config /etc/forge/forge.toml --out /var/backups/forge/forge.db
-for r in /var/lib/forge/repos/*/*.git; do
-  git -C "$r" bundle create "/var/backups/forge/bundles/$(basename $(dirname $r))-$(basename $r .git).bundle" --all 2>/dev/null || true
-done
-tar -C /var/backups/forge -cf - forge.db bundles | zstd | age -r "$(cat /run/forge/secrets/backup.recipient)" -o /var/backups/forge/<stamp>.tar.zst.age
-```
-
-`forge-backup` (installed by `scripts/deploy`, run daily by
-`forge-backup.timer`) currently calls `forge admin backup --out
-<stamp>.tar.zst` expecting a tar of database plus repositories; the CLI
-today writes only the SQLite snapshot into that path. Until `admin backup`
-grows the repository part, the script's output is a database-only backup
-with a misleading extension, and repositories must be bundled separately
-as above. The encryption recipient is the `backup_encryption_key` age
-identity whose private half stays with the operator (`docs/secrets.md`).
-Off-site copy: `OFFSITE_CMD` in `/etc/default/forge-backup`.
+**The nightly job.** `forge admin backup --out <stamp>.tar.gz` writes one
+archive with all of the above: `forge.db` (the `VACUUM INTO` snapshot,
+taken first), `repos/<owner>/<name>.bundle` for every non-empty
+repository, and the `assets/`, `tls/` and `ssh/` subtrees.
+`infra/backup/forge-backup` (installed by `scripts/deploy sysupdate`, run
+daily by `forge-backup.timer` as the `forge` user with the data directory
+mounted read-only) wraps it with `age -r <backup recipient>` as
+`/var/backups/forge/<stamp>.tar.gz.age`, keeps the newest seven, and runs
+`OFFSITE_CMD` from `/etc/default/forge-backup` when set. The encryption
+recipient is the `backup_encryption_key` age identity whose private half
+stays with the operator (`docs/secrets.md`); the daemon reports the age of
+the newest archive as `forge_backup_age_seconds` (`BackupStale` after 36 h).
 
 Verify a backup by restoring it somewhere else (see the drill).
 
@@ -78,16 +72,13 @@ Reads and writes for that node's repositories are down until restored
    (binary, config, secrets: same TLS certificate and host key, so clients
    notice nothing).
 3. `systemctl stop forge` on the new node.
-4. Restore the database: decrypt the newest archive
-   (`age -d -i backup.key <stamp>.tar.zst.age | zstd -d | tar -x`), copy
-   `forge.db` to `/var/lib/forge/forge.db`, remove any stale `forge.db-wal`
-   / `forge.db-shm`, `chown forge:forge`, mode 0640.
-5. Restore repositories: for each bundle `git clone --mirror
-   <bundle> /var/lib/forge/repos/<owner>/<repo>.git`, then
-   `git -C <repo> symbolic-ref HEAD refs/heads/<default_branch>` (the
-   default branch is in `repositories.default_branch`; `forge admin repo
-   list` shows the name after the DB is in place) and `chown -R
-   forge:forge`. From a filesystem snapshot: copy `repos/` as is.
+4. Decrypt the newest archive on the laptop (`age -d -i backup.key -o
+   <stamp>.tar.gz <stamp>.tar.gz.age`; the key never goes to the node),
+   copy the plain `tar.gz` to the node.
+5. `sudo -u forge forge admin restore --in <stamp>.tar.gz`: replaces
+   `forge.db` (stale `-wal`/`-shm` removed) and recreates every repository
+   from its bundle with the right default branch. Step by step in
+   `docs/runbooks/restore-from-backup.md`.
 6. `systemctl start forge`; `forge admin status`; `forge admin repo check
    OWNER/NAME` for every restored repository (or a loop over `repo list`);
    `scripts/deploy smoke <pop>`.
@@ -179,3 +170,9 @@ six steps against a throwaway node.
 - [ ] Issues and comments for one repository are present and readable.
 - [ ] Time the whole exercise; update the RTO table if it drifted.
 - [ ] Record the date and the archive name in the operations log.
+
+## Restore drills
+
+| Date | Archive | Restored on | Result |
+| --- | --- | --- | --- |
+| 2026-09-12 | ewr1 `20260912T120218Z.tar.gz.age` (1.1 MB) | laptop, fresh data directory (`forge admin init` + `restore`) | integrity ok, schema v3, 1 user, 1 repository, `repo check` ok; served locally: `/~jdb/forge/` rendered and `git clone` over SSH with the registered key gave `38be9e5`, identical to the live leader's `main` |

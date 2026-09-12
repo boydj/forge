@@ -53,7 +53,7 @@ Until then the forge is developed on GitHub and deployed from a laptop.
 - Once reliability is proven the GitHub repository becomes an archived
   mirror with a README pointing at the forge, and CI (below) still runs
   there from the mirror if convenient.
-- Release assets: uploaded to the forge (M3 releases) and copied to the
+- Release assets: uploaded to the forge (`forge admin release`) and copied to the
   GitHub release page by the same mirror job while the mirror exists.
 
 ## Avoiding the circular dependency

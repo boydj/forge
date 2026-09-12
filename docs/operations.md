@@ -47,7 +47,7 @@ complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 | `limits.max_push_bytes` | 1 GiB | `receive.maxInputSize` for `git receive-pack` |
 | `limits.max_titan_bytes` | 64 MiB | largest Titan body on any path; larger `size=` is refused before the body. Must be >= `max_asset_bytes` |
 | `limits.max_text_bytes` | 256 KiB | issue, comment and edit bodies |
-| `limits.max_asset_bytes` | 64 MiB | one release asset (releases are planned for M3; validated but not yet used) |
+| `limits.max_asset_bytes` | 64 MiB | one release asset (Titan upload to `/~o/r/releases/<tag>/assets/<name>`) |
 | `limits.max_render_bytes` | 512 KiB | blob bytes rendered inline (README, file view); larger files link to `raw` |
 | `limits.max_diff_bytes` | 1 MiB | patch text per commit page before truncation |
 | `limits.min_free_bytes` | 1 GiB | below this free space: repository creation and pushes are refused and `/status` reports unhealthy (`41`) |
@@ -55,16 +55,16 @@ complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 | `limits.max_conns_per_ip` | `32` | per source address |
 | `limits.ssh_max_conns` | `256` | concurrent SSH connections |
 | `limits.ssh_max_conns_per_ip` | `16` | per source address |
-| `limits.write_rate_per_minute` | `30` | intended per-account Titan write rate; **not enforced yet** |
-| `limits.max_change_bytes` | 64 MiB | one push by a reader proposing a change (M3 change review, in progress) |
-| `limits.max_open_changes_per_user` | `10` | open changes per user per repository (M3, in progress) |
-| `limits.max_change_commits` | `500` | commits in one change version (M3, in progress) |
+| `limits.write_rate_per_minute` | `30` | per-account Titan writes per sliding minute (`;edit` reads exempt); over it: `50 too many writes` |
+| `limits.max_change_bytes` | 64 MiB | one push by a reader proposing a change (`refs/for/<branch>`, ADR 0012) |
+| `limits.max_open_changes_per_user` | `10` | open changes per user per repository |
+| `limits.max_change_commits` | `500` | commits in one change version |
 | `metrics.listen` | `""` (disabled) | plain-HTTP `/metrics`; bind to a WireGuard or loopback address only |
-| `cluster.enabled` | `false` | multi-node mode. Today its only effect is that writes are refused on nodes that are not `repositories.leader_node` |
-| `cluster.control_listen` | `""` | node-to-node RPC address; required when enabled (**replication itself is planned, M5**) |
-| `cluster.peers` | `{}` | node name -> control address (planned) |
-| `cluster.secret_file` | `""` | shared cluster secret (planned) |
-| `cluster.sync_interval` | `10s` | replica poll interval (planned) |
+| `cluster.enabled` | `false` | multi-node mode: replication from each repository's leader, Titan write forwarding and git push forwarding to it, the fleet status page (`docs/replication.md`) |
+| `cluster.control_listen` | `""` | node-to-node RPC address on the WireGuard mesh; required when enabled |
+| `cluster.peers` | `{}` | node name -> control address (`[wg address]:9200`) |
+| `cluster.secret_file` | `""` | shared cluster secret (`/run/forge/secrets/cluster.secret`; also the HMAC key of action tokens) |
+| `cluster.sync_interval` | `10s` | replica poll interval |
 
 Fixed server constants (not configurable): request-line read timeout 10 s,
 response write timeout 60 s, Titan body timeout 120 s, request line
@@ -77,7 +77,7 @@ deadline 60 s.
 <data_dir>/
   forge.db, forge.db-wal, forge.db-shm   SQLite (WAL, synchronous=NORMAL, foreign keys on)
   repos/<owner>/<repo>.git/              bare repositories (0750 dirs, config owned by the forge)
-  assets/<owner>/<repo>/<release>/<name> release assets (planned)
+  assets/<owner>/<repo>/<release>/<name> release assets
   tmp/                                   in-progress uploads and purge staging (same filesystem as repos)
   tls/server.crt, server.key             service identity (0644 / 0600)
   ssh/host_ed25519, host_ed25519.pub     host key (0600 / 0644)
@@ -99,10 +99,11 @@ Production nodes keep the identities under `/run/forge/secrets/` and point
 | `repositories` | owner, name, description, private, archived, default branch, `vcs`, `leader_node`, `size_bytes`, timestamps, `deleted_at` (soft delete) |
 | `collaborators` | (repo, user) -> `read`/`write`/`admin` |
 | `issues`, `comments` | tracker; comments target `issue` or `change` |
-| `changes`, `reviews`, `releases`, `release_assets` | schema present, features planned (M3) |
+| `changes`, `change_versions`, `reviews` | change review workflow (ADR 0012) |
+| `releases`, `release_assets` | releases and their files |
 | `events` | append-only activity and replication log: kind, repo, user, subject, gemini path, JSON payload, node |
 | `tokens` | one-time codes (certificate enrolment), stored hashed with expiry and `used_at` |
-| `nodes`, `repo_replicas` | cluster membership and per-replica sync state (M5) |
+| `nodes`, `repo_replicas` | cluster membership and per-replica sync state |
 | `settings` | key/value |
 | `schema_migrations` | applied migration versions |
 
@@ -178,8 +179,9 @@ debug level with the source IP.
 ## Metrics
 
 `metrics.listen` serves Prometheus text on `/metrics` (plus Go and process
-collectors). Gauges marked planned are registered but only populated once
-the corresponding feature exists.
+collectors). The storage gauges are refreshed once a minute by the stats
+loop; `forge_backup_age_seconds` is the age of the newest archive in
+`status.backup_dir`.
 
 | Metric | Type | Labels |
 | --- | --- | --- |
@@ -191,10 +193,10 @@ the corresponding feature exists.
 | `forge_ssh_session_seconds` | histogram | `op` |
 | `forge_ssh_connections` | gauge | |
 | `forge_ssh_push_forwards_total` | counter | `role` (`replica`/`leader`), `result` (`ok`/`rejected`/`unreachable`) |
-| `forge_repositories`, `forge_repository_bytes`, `forge_users`, `forge_disk_free_bytes` | gauge | planned population |
-| `forge_replica_lag_events` | gauge | `leader` (M5) |
-| `forge_leader_repositories`, `forge_healthy`, `forge_bgp_announced`, `forge_backup_age_seconds` | gauge | M5 / health worker |
-| `forge_hook_decisions_total` | counter | `hook`, `decision` (planned) |
+| `forge_repositories`, `forge_repository_bytes`, `forge_users`, `forge_disk_free_bytes` | gauge | |
+| `forge_replica_lag_events` | gauge | `leader` |
+| `forge_leader_repositories`, `forge_healthy`, `forge_bgp_announced`, `forge_backup_age_seconds` | gauge | |
+| `forge_hook_decisions_total` | counter | `hook`, `decision` (no series until the hooks record decisions) |
 
 ## Health: `/status`
 
