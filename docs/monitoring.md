@@ -77,9 +77,10 @@ From `internal/metrics/metrics.go` (also listed in `docs/operations.md`):
 
 The storage gauges (`forge_disk_free_bytes`, `forge_repositories`,
 `forge_repository_bytes`, `forge_users`) are refreshed once a minute by the
-daemon's stats loop; `forge_backup_age_seconds` is the age of
-`<data_dir>/backup.stamp`, which `forge-backup` writes after a successful
-run (no stamp: 0, which never alerts). `forge_hook_decisions_total` has no
+daemon's stats loop; `forge_backup_age_seconds` is the age of the
+newest archive in `status.backup_dir` (`/var/backups/forge`; none: 0, which
+never alerts). The backup job writes nothing into the data directory: its
+unit mounts it read-only. `forge_hook_decisions_total` has no
 series until the hooks record decisions (the `decision` values are not
 final; the rule treats anything other than `allow|accept|ok` as a denial).
 

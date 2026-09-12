@@ -163,6 +163,10 @@ type Status struct {
 	// the control network (e.g. "http://[fda5:...::fa]:9090"); its firing
 	// alerts are served as the /status/alerts gemfeed. Empty disables it.
 	PrometheusURL string `toml:"prometheus_url"`
+	// BackupDir is where forge-backup writes its archives (*.tar.gz.age);
+	// the age of the newest one is forge_backup_age_seconds. Empty: not
+	// reported (the gauge stays 0, which never alerts).
+	BackupDir string `toml:"backup_dir"`
 }
 
 // Metrics configures the Prometheus endpoint (HTTP, private network only).
@@ -342,6 +346,9 @@ func (c *Config) Validate() error {
 	}
 	if u := c.Status.PrometheusURL; u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		errs = append(errs, errors.New("status.prometheus_url must start with http:// or https://"))
+	}
+	if d := c.Status.BackupDir; d != "" && !filepath.IsAbs(d) {
+		errs = append(errs, errors.New("status.backup_dir must be an absolute path"))
 	}
 	if c.Docs.Repo != "" {
 		owner, name, ok := strings.Cut(c.Docs.Repo, "/")

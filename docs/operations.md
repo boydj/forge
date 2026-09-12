@@ -21,6 +21,7 @@ complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 | `docs.path` | `docs` | subdirectory of `docs.repo` to publish (`""` = the repository root) |
 | `docs.ref` | (empty) | branch or tag to read; empty = the repository's default branch |
 | `status.prometheus_url` | (empty) | base URL of the monitoring host's Prometheus over the control network (`http://[<mon1 wg address>]:9090`); its firing alerts are served as the `/status/alerts` gemfeed and counted on `/status/`. Empty disables the feed |
+| `status.backup_dir` | (empty) | directory of `forge-backup` archives (`/var/backups/forge`); the newest one's age is `forge_backup_age_seconds`. Empty: not reported |
 | `docs.incidents` | `incidents` | subdirectory of `docs.path` holding incident reports (`YYYY-MM-DD-slug.md`) for the status page and its feeds; `""` disables the list |
 | `data_dir` | `/var/lib/forge` | database, repositories, assets, tmp, TLS and SSH identities. Override: `FORGE_DATA_DIR` |
 | `log_level` | `info` | `debug`, `info`, `warn`, `error`. Override: `FORGE_LOG_LEVEL` |

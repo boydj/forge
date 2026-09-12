@@ -49,6 +49,9 @@ path = "docs/site"
 # The monitoring host's Prometheus over WireGuard (docs/monitoring.md); its
 # firing alerts become the /status/alerts gemfeed. Empty = no alerts feed.
 prometheus_url = "${prometheus_url}"
+# Where forge-backup.service writes archives; the newest one's age is
+# forge_backup_age_seconds (BackupStale after 36 h).
+backup_dir = "/var/backups/forge"
 
 [cluster]
 enabled         = ${cluster_enabled}

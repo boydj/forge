@@ -293,10 +293,30 @@ func maintenanceLoop(ctx context.Context, app *forge.Forge, log *slog.Logger) {
 	}
 }
 
+// newestBackup is the modification time of the newest forge-backup archive
+// in dir (empty dir or no archive: false).
+func newestBackup(dir string) (time.Time, bool) {
+	if dir == "" {
+		return time.Time{}, false
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "*.tar.gz.age"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	var newest time.Time
+	for _, m := range matches {
+		if fi, err := os.Stat(m); err == nil && fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+	}
+	return newest, !newest.IsZero()
+}
+
 // statsLoop refreshes the storage gauges once a minute: free bytes on the
 // data filesystem, repository count and bytes, accounts, and the age of the
-// newest backup (forge-backup writes <data_dir>/backup.stamp on success; no
-// stamp leaves the gauge at 0, which never alerts).
+// newest backup archive in status.backup_dir (none: the gauge stays 0,
+// which never alerts). The backup job itself must not write into the data
+// directory: its unit mounts it read-only.
 func statsLoop(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *metrics.Registry, log *slog.Logger) {
 	refresh := func() {
 		var st syscall.Statfs_t
@@ -312,8 +332,8 @@ func statsLoop(ctx context.Context, cfg *config.Config, app *forge.Forge, reg *m
 		if n, err := app.Store.CountUsers(ctx); err == nil {
 			reg.UserCount.Set(float64(n))
 		}
-		if fi, err := os.Stat(filepath.Join(cfg.DataDir, "backup.stamp")); err == nil {
-			reg.BackupAge.Set(time.Since(fi.ModTime()).Seconds())
+		if newest, ok := newestBackup(cfg.Status.BackupDir); ok {
+			reg.BackupAge.Set(time.Since(newest).Seconds())
 		}
 	}
 	refresh()
