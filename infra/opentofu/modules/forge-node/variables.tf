@@ -155,3 +155,14 @@ variable "prometheus_url" {
     error_message = "prometheus_url must be empty or start with http:// or https://."
   }
 }
+
+variable "mirrors" {
+  description = "Repositories mirrored to an external remote after every push and hourly: \"owner/name\" => ssh or https URL (forge.toml [[mirrors]]). The ssh deploy key is mirror_deploy_key in the bundle; without it mirroring stays disabled."
+  type        = map(string)
+  default     = {}
+
+  validation {
+    condition     = alltrue([for repo, url in var.mirrors : can(regex("^[a-z][a-z0-9-]*/[a-z0-9][a-z0-9._-]*$", repo)) && can(regex("^(git@[^:]+:.+|ssh://.+|https://.+)$", url))])
+    error_message = "mirrors keys must be owner/name and values git@host:path, ssh:// or https:// URLs."
+  }
+}

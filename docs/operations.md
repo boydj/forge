@@ -65,6 +65,10 @@ complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 | `cluster.peers` | `{}` | node name -> control address (`[wg address]:9200`) |
 | `cluster.secret_file` | `""` | shared cluster secret (`/run/forge/secrets/cluster.secret`; also the HMAC key of action tokens) |
 | `cluster.sync_interval` | `10s` | replica poll interval |
+| `mirror.key_file` | (empty) | OpenSSH private key for ssh mirrors (`/run/forge/secrets/mirror.key` on nodes); configured but missing = mirroring disabled, logged once |
+| `mirror.known_hosts_file` | (empty) | pinned host keys for the mirror remotes (`/etc/forge/mirror_known_hosts`, from `infra/mirror/known_hosts`) |
+| `mirror.interval` | `1h0m0s` | periodic reconcile of every mirror; pushes are also mirrored as they happen |
+| `[[mirrors]]` `repo`, `url` | (none) | repository (`owner/name`) and its remote (`git@host:path`, `ssh://` or `https://`); only the repository's leader pushes (`docs/dogfooding.md`) |
 
 Fixed server constants (not configurable): request-line read timeout 10 s,
 response write timeout 60 s, Titan body timeout 120 s, request line
@@ -193,6 +197,8 @@ loop; `forge_backup_age_seconds` is the age of the newest archive in
 | `forge_ssh_session_seconds` | histogram | `op` |
 | `forge_ssh_connections` | gauge | |
 | `forge_ssh_push_forwards_total` | counter | `role` (`replica`/`leader`), `result` (`ok`/`rejected`/`unreachable`) |
+| `forge_mirror_pushes_total` | counter | `result` (`ok`/`error`) |
+| `forge_mirror_last_success_seconds`, `forge_mirrors_configured` | gauge | `repo` (the first) |
 | `forge_repositories`, `forge_repository_bytes`, `forge_users`, `forge_disk_free_bytes` | gauge | |
 | `forge_replica_lag_events` | gauge | `leader` |
 | `forge_leader_repositories`, `forge_healthy`, `forge_bgp_announced`, `forge_backup_age_seconds` | gauge | |
@@ -206,6 +212,21 @@ loop; `forge_backup_age_seconds` is the age of the newest archive in
 is what `scripts/deploy smoke` checks. `docs/network-architecture.md`
 refers to it as `/healthz`; the implemented path is `/status`, and the
 health worker that will drive `bgp-announce` from it is part of M5.
+
+## Mirroring
+
+`[[mirrors]]` entries are pushed with `git push --mirror` by the
+repository's leader: two seconds after a push (a burst becomes one mirror
+push) and every `mirror.interval`. The push runs under the hardened git
+environment with only the transport it needs opened (ssh with
+`GIT_SSH_COMMAND` pointing at the deploy key and the pinned host keys, or
+https), holds one git concurrency slot, is bounded to ten minutes, and on
+failure is retried after 1, 5 and then every 30 minutes without ever
+blocking a user's push. `forge admin repo mirror OWNER/NAME` runs one push
+now and prints the error if any. Metrics: `forge_mirror_pushes_total`
+(`result`), `forge_mirror_last_success_seconds` (`repo`; kept in
+`settings` across restarts) and `forge_mirrors_configured`; alert
+`MirrorStale`. Setup: `docs/runbooks/enable-mirroring.md`.
 
 ## Status page: `/status/`
 

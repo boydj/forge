@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -41,6 +42,10 @@ type Config struct {
 	Health  Health  `toml:"health"`
 	Docs    Docs    `toml:"docs"`
 	Status  Status  `toml:"status"`
+	Mirror  Mirror  `toml:"mirror"`
+	// Mirrors lists repositories pushed to an external remote after every
+	// push and on Mirror.Interval (docs/dogfooding.md, "Mirror strategy").
+	Mirrors []MirrorTarget `toml:"mirrors"`
 }
 
 // Health configures self-checks and anycast announcement control.
@@ -169,6 +174,43 @@ type Status struct {
 	BackupDir string `toml:"backup_dir"`
 }
 
+// Mirror configures outbound mirroring to external git remotes.
+type Mirror struct {
+	// KeyFile is the OpenSSH private key used for ssh mirrors
+	// (/run/forge/secrets/mirror.key on nodes). A configured but missing
+	// file disables mirroring with one log line at start.
+	KeyFile string `toml:"key_file"`
+	// KnownHostsFile pins the remotes' host keys (StrictHostKeyChecking=yes).
+	KnownHostsFile string `toml:"known_hosts_file"`
+	// Interval is the periodic reconcile of every mirror (default 1h);
+	// pushes are also mirrored as they happen.
+	Interval Duration `toml:"interval"`
+}
+
+// MirrorTarget is one repository -> remote mapping.
+type MirrorTarget struct {
+	// Repo is "owner/name".
+	Repo string `toml:"repo"`
+	// URL is an ssh (git@host:path or ssh://) or https remote.
+	URL string `toml:"url"`
+}
+
+// IsSSH reports whether the remote is reached over ssh (needs the key).
+func (m MirrorTarget) IsSSH() bool {
+	return strings.HasPrefix(m.URL, "ssh://") || (!strings.Contains(m.URL, "://") && strings.Contains(m.URL, ":"))
+}
+
+// MirrorTargets returns the configured mirrors keyed by repository.
+func (c *Config) MirrorTargets() map[string]string {
+	out := make(map[string]string, len(c.Mirrors))
+	for _, m := range c.Mirrors {
+		out[m.Repo] = m.URL
+	}
+	return out
+}
+
+var mirrorRepoRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}/[a-z0-9][a-z0-9._-]{0,63}$`)
+
 // Metrics configures the Prometheus endpoint (HTTP, private network only).
 type Metrics struct {
 	// Listen is the address for /metrics; empty disables. Bind it to a
@@ -268,6 +310,7 @@ func Default(dataDir string) *Config {
 		},
 		Health: Health{Interval: Duration{10 * time.Second}},
 		Docs:   Docs{Path: "docs", Incidents: "incidents"},
+		Mirror: Mirror{Interval: Duration{time.Hour}},
 	}
 }
 
@@ -343,6 +386,34 @@ func (c *Config) Validate() error {
 	}
 	if c.Cluster.Enabled && c.Cluster.ControlListen == "" {
 		errs = append(errs, errors.New("cluster.control_listen is required when cluster.enabled"))
+	}
+	seen := map[string]bool{}
+	for _, m := range c.Mirrors {
+		if !mirrorRepoRe.MatchString(m.Repo) || strings.HasSuffix(m.Repo, ".git") {
+			errs = append(errs, fmt.Errorf("mirrors: repo %q must be owner/name", m.Repo))
+		}
+		if seen[m.Repo] {
+			errs = append(errs, fmt.Errorf("mirrors: repo %q listed twice", m.Repo))
+		}
+		seen[m.Repo] = true
+		switch {
+		case m.URL == "":
+			errs = append(errs, fmt.Errorf("mirrors: %s has no url", m.Repo))
+		case strings.HasPrefix(m.URL, "https://"), strings.HasPrefix(m.URL, "ssh://"):
+		case strings.Contains(m.URL, "://"):
+			errs = append(errs, fmt.Errorf("mirrors: %s: url must be ssh (git@host:path, ssh://) or https", m.Repo))
+		case !strings.Contains(m.URL, ":") || strings.HasPrefix(m.URL, "/") || strings.HasPrefix(m.URL, "."):
+			errs = append(errs, fmt.Errorf("mirrors: %s: url must be ssh (git@host:path, ssh://) or https", m.Repo))
+		}
+		if m.IsSSH() && c.Mirror.KeyFile == "" {
+			errs = append(errs, fmt.Errorf("mirrors: %s uses ssh but mirror.key_file is empty", m.Repo))
+		}
+		if m.IsSSH() && c.Mirror.KnownHostsFile == "" {
+			errs = append(errs, fmt.Errorf("mirrors: %s uses ssh but mirror.known_hosts_file is empty", m.Repo))
+		}
+	}
+	if c.Mirror.Interval.Duration < 0 {
+		errs = append(errs, errors.New("mirror.interval must not be negative"))
 	}
 	if u := c.Status.PrometheusURL; u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 		errs = append(errs, errors.New("status.prometheus_url must start with http:// or https://"))

@@ -131,3 +131,9 @@ variable "docs_repo" {
   type        = string
   default     = "jdb/forge"
 }
+
+variable "mirrors" {
+  description = "Repositories mirrored to GitHub (docs/dogfooding.md): owner/name => remote. Enabled on the nodes once mirror_deploy_key is in the bundle (docs/runbooks/enable-mirroring.md)."
+  type        = map(string)
+  default     = { "jdb/forge" = "git@github.com:boydj/forge.git" }
+}

@@ -53,6 +53,14 @@ prometheus_url = "${prometheus_url}"
 # forge_backup_age_seconds (BackupStale after 36 h).
 backup_dir = "/var/backups/forge"
 
+[mirror]
+# Outbound mirroring to an external remote (docs/dogfooding.md). The deploy
+# key comes from the bundle (mirror_deploy_key -> /run/forge/secrets/mirror.key);
+# without it mirroring is disabled with one log line. Host keys are pinned.
+key_file         = "/run/forge/secrets/mirror.key"
+known_hosts_file = "/etc/forge/mirror_known_hosts"
+interval         = "1h"
+${mirrors_toml}
 [cluster]
 enabled         = ${cluster_enabled}
 control_listen  = "${control_listen}"

@@ -43,6 +43,7 @@ locals {
     announcer          = var.bgp_announce ? "/usr/local/bin/forge-bgp-request" : ""
     docs_repo          = var.docs_repo
     prometheus_url     = var.prometheus_url
+    mirrors_toml       = join("", [for repo, url in var.mirrors : "[[mirrors]]\nrepo = \"${repo}\"\nurl = \"${url}\"\n"])
   })
 
   cloud_init = templatefile("${local.repo_root}/infra/cloud-init/node.yaml.tftpl", {

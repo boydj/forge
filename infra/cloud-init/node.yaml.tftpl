@@ -231,7 +231,7 @@ write_files:
       # itself, so a stolen deploy key cannot replace root-executed code.
       #
       #   install-binary <sha256>   stdin -> /usr/local/bin/forge (previous kept as forge.prev)
-      #   write-config <name>       stdin -> forge.toml | nftables.conf | bird.conf | state.conf | wg0.conf | secrets
+      #   write-config <name>       stdin -> forge.toml | nftables.conf | bird.conf | state.conf | wg0.conf | secrets | mirror_known_hosts
       #   load-secrets              decrypt /etc/forge/secrets.tar.age into /run/forge (tmpfs); render wg0/bird configs
       #   apply                     nftables, forge-secrets, wg0, bird, forge; on failure print the journal, exit 1
       #   rollback                  forge.prev -> forge, restart
@@ -268,7 +268,8 @@ write_files:
           state.conf)    echo /etc/bird/state.conf 0640 bird;;
           wg0.conf)      echo /etc/wireguard/wg0.conf.in 0600 root;;
           secrets)       echo "$BUNDLE" 0600 root;;
-          *) die "write-config: unknown name '$1' (forge.toml nftables.conf bird.conf state.conf wg0.conf secrets)";;
+          mirror_known_hosts) echo /etc/forge/mirror_known_hosts 0644 root;;
+          *) die "write-config: unknown name '$1' (forge.toml nftables.conf bird.conf state.conf wg0.conf secrets mirror_known_hosts)";;
         esac
       }
       check() { # check <name> <tmp>: non-zero (and a reason) for anything malformed or that would run as root
@@ -330,7 +331,7 @@ write_files:
           echo "no $BUNDLE yet (run scripts/deploy); nothing to decrypt" >&2
         fi
         install -d -m 0700 -o forge -g forge "$new" "$new/tls" "$new/ssh"
-        for f in tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient; do
+        for f in tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient mirror.key; do
           [ -f "$stage/$f" ] && install -m 0400 -o forge -g forge "$stage/$f" "$new/$f"
         done
         rm -rf "$sec.old"; [ -d "$sec" ] && mv "$sec" "$sec.old"; mv "$new" "$sec"; rm -rf "$sec.old"

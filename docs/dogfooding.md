@@ -47,9 +47,13 @@ Until then the forge is developed on GitHub and deployed from a laptop.
 
 - **GitHub stays as a read-only mirror** until the forge has served the
   repository for a full quarter without a restore, a lost push or an
-  unplanned identity rotation. Mirroring is a post-receive job on the
-  leader (planned `forge admin repo mirror` or a cron `git push --mirror
-  github` from a deploy-user clone), never the other way round.
+  unplanned identity rotation. Mirroring is the daemon's mirror worker on
+  the repository's leader (`internal/mirror`): after every push (debounced)
+  and once an hour it runs `git push --mirror` to the remote in
+  `[[mirrors]]` with a dedicated deploy key from the bundle and pinned host
+  keys (`infra/mirror/known_hosts`); `forge admin repo mirror OWNER/NAME`
+  runs one push by hand. Never the other way round: nothing is fetched
+  from GitHub. Enabling it: `docs/runbooks/enable-mirroring.md`.
 - Once reliability is proven the GitHub repository becomes an archived
   mirror with a README pointing at the forge, and CI (below) still runs
   there from the mirror if convenient.

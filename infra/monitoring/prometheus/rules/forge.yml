@@ -85,6 +85,15 @@ groups:
           description: "forge-backup.timer runs daily at 04:45 UTC; an age above 36h means at least one run failed or did not happen. `systemctl status forge-backup` and `journalctl -u forge-backup`."
           runbook: "docs/disaster-recovery.md#backup"
 
+      - alert: MirrorStale
+        expr: (time() - forge_mirror_last_success_seconds) > 26 * 3600
+        for: 1h
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.repo }} was last mirrored {{ $value | humanizeDuration }} ago from {{ $labels.node }}"
+          description: "The leader mirrors after every push and every hour; more than 26h without a success means the deploy key, the remote or the network is broken. `forge admin repo mirror {{ $labels.repo }}` on the leader shows the error."
+          runbook: "docs/runbooks/enable-mirroring.md"
+
       - alert: DiskLow
         expr: forge_disk_free_bytes < 2 * 1024 * 1024 * 1024
         for: 5m

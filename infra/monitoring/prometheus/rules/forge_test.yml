@@ -143,6 +143,28 @@ tests:
               description: "forge-backup.timer runs daily at 04:45 UTC; an age above 36h means at least one run failed or did not happen. `systemctl status forge-backup` and `journalctl -u forge-backup`."
               runbook: "docs/disaster-recovery.md#backup"
 
+  # MirrorStale: a mirror last pushed at t=0 is 28h old at eval 28h (over
+  # 26h since 26h, held 1h -> firing); one pushed every scrape never fires.
+  # Samples every 30s so the series is never stale for the `for` clause.
+  - interval: 30s
+    input_series:
+      - series: 'forge_mirror_last_success_seconds{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100", repo="jdb/forge"}'
+        values: "0x3400"
+      - series: 'forge_mirror_last_success_seconds{job="forge", pop="ewr1", node="ewr1", instance="[fda5:bc65:9bb1:1::1]:9100", repo="jdb/other"}'
+        values: "0+30x3400"
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: MirrorStale
+        exp_alerts: []
+      - eval_time: 28h
+        alertname: MirrorStale
+        exp_alerts:
+          - exp_labels: { severity: warn, job: forge, pop: ewr1, node: ewr1, instance: "[fda5:bc65:9bb1:1::1]:9100", repo: jdb/forge }
+            exp_annotations:
+              summary: "jdb/forge was last mirrored 1d 4h 0m 0s ago from ewr1"
+              description: "The leader mirrors after every push and every hour; more than 26h without a success means the deploy key, the remote or the network is broken. `forge admin repo mirror jdb/forge` on the leader shows the error."
+              runbook: "docs/runbooks/enable-mirroring.md"
+
   # DiskLow: 1 GiB free < 2 GiB threshold for 5m.
   - interval: 30s
     input_series:

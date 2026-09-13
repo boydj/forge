@@ -35,6 +35,7 @@ module "node" {
   bgp_announce     = each.value.bgp_announce
   docs_repo        = var.docs_repo
   prometheus_url   = local.prometheus_url
+  mirrors          = var.mirrors
 
   operator_ssh_public_keys = coalesce(
     var.operator_ssh_public_keys,

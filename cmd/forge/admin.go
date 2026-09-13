@@ -15,6 +15,7 @@ import (
 
 	"as215520.net/forge/internal/config"
 	"as215520.net/forge/internal/forge"
+	"as215520.net/forge/internal/mirror"
 	"as215520.net/forge/internal/repl"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/version"
@@ -32,6 +33,7 @@ func adminUsage() {
   repo delete OWNER/NAME | repo restore OWNER/NAME | repo check OWNER/NAME | repo size OWNER/NAME
   repo resync OWNER/NAME | repo resync --all | repo move-leader OWNER/NAME NODE
   repo archive OWNER/NAME | repo unarchive OWNER/NAME
+  repo mirror OWNER/NAME        (push to its configured mirror now; leader only)
   release create OWNER/NAME --as USER FILE      (FILE: tag, title, notes; the tag must exist)
   release asset OWNER/NAME TAG --as USER [--mime TYPE] FILE
   announce TEXT | announce --clear      (notice shown on the front page)
@@ -441,6 +443,27 @@ func adminRepo(ctx context.Context, app *forge.Forge, args []string) error {
 			return err
 		}
 		fmt.Printf("created %s/%s at %s\n", r.Owner, r.Name, app.RepoPath(r.Owner, r.Name))
+		return nil
+	case "mirror":
+		if len(args) != 2 {
+			return errors.New("repo mirror OWNER/NAME")
+		}
+		owner, name, err := splitRepo(args[1])
+		if err != nil {
+			return err
+		}
+		if _, err := app.Store.RepoByPath(ctx, owner, name); err != nil {
+			return err
+		}
+		w := newMirrorWorker(app.Config, app, nil, app.Log)
+		if !w.Enabled() {
+			return fmt.Errorf("mirroring is disabled: %s", w.Reason())
+		}
+		start := time.Now()
+		if err := w.Push(ctx, owner+"/"+name); err != nil {
+			return err
+		}
+		fmt.Printf("mirrored %s/%s to %s in %s\n", owner, name, mirror.Redact(app.Config.MirrorTargets()[owner+"/"+name]), time.Since(start).Round(time.Millisecond))
 		return nil
 	case "archive", "unarchive":
 		if len(args) != 2 {

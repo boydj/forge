@@ -201,6 +201,7 @@ push_configs() { # push_configs <target> <pop> <dir>: data files only; the helpe
   helper_file "$t" "$ROOT/infra/bird/generated/$pop/bird.conf" write-config bird.conf
   helper_file "$t" "$ROOT/infra/bird/generated/$pop/state.conf" write-config state.conf
   helper_file "$t" "$ROOT/infra/wireguard/generated/$pop/wg0.conf" write-config wg0.conf
+  helper_file "$t" "$ROOT/infra/mirror/known_hosts" write-config mirror_known_hosts
 }
 
 # Secrets: extract this node's subset from the SOPS bundle, tar it, encrypt to
@@ -227,6 +228,7 @@ push_secrets() { # push_secrets <target> <pop>
   get cluster_secret  > "$d/cluster.secret"
   get "wireguard_private_keys.$pop" > "$d/wg.key"
   get vultr_bgp_password > "$d/bgp.password"
+  get mirror_deploy_key > "$d/mirror.key"
   bk=$(get backup_encryption_key)
   if [ -n "$bk" ] && [ "${bk#AGE-SECRET-KEY-}" != "$bk" ]; then
     printf '%s\n' "$bk" | age-keygen -y > "$d/backup.recipient" 2>/dev/null || true
