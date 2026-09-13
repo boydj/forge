@@ -155,3 +155,9 @@ variable "prometheus_url" {
     error_message = "prometheus_url must be empty or start with http:// or https://."
   }
 }
+
+variable "offsite_bucket" {
+  description = "Backblaze B2 bucket for off-site backups (infra/opentofu/environments/b2). Renders /etc/default/forge-backup so forge-backup copies each archive there with forge-offsite; empty = no off-site copy. Set it only once b2_backup_key_id/b2_backup_key are in the bundle."
+  type        = string
+  default     = ""
+}

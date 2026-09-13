@@ -7,8 +7,7 @@ loss. Uses `forge admin restore`.
 **Preconditions**
 
 - An archive `/var/backups/forge/<stamp>.tar.gz.age` (kept: newest 7 on
-  the node; off-site copy only if `OFFSITE_CMD` is set in
-  `/etc/default/forge-backup`, which `deploy` does not install: **PLANNED**).
+  the node) or its off-site copy in B2 (`enable-offsite-backups.md`).
 - The backup private key: `backup_encryption_key` in the SOPS bundle
   (and its offline copy). The key is never on the node.
 - A node with the binary and config in place (`deploy-first-node.md` or
@@ -31,6 +30,10 @@ production nodes, whose identities live in `/run/forge/secrets`).
 `<stamp>.tar.gz.age`. `FILE.db` gives a database-only snapshot.
 
 ## 0. Get and decrypt the archive (laptop)
+
+From B2 (survives the node): `eval "$(scripts/secrets env infra/secrets/dev.enc.yaml)"`, then
+`rclone --config <(printf '[b2]\ntype = b2\naccount = %s\nkey = %s\n' "$B2_APPLICATION_KEY_ID" "$B2_APPLICATION_KEY") copy b2:<bucket>/<pop>/<stamp>.tar.gz.age .`
+(`rclone ls b2:<bucket>/<pop>/` lists them). From the node:
 
 ```sh
 ssh -p 2200 deploy@<pop>.nodes.<zone> 'sudo ls -l /var/backups/forge/'

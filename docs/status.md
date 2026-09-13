@@ -102,8 +102,9 @@ prototype and M6 desired state are done.
 
 ## Technical debt
 
-- Security review: all findings remediated except SR-24 (informational).
-  Existing nodes (none deployed yet) would migrate with `deploy sysupdate`.
+- Security review: all findings remediated except SR-24 (informational);
+  re-review of the surfaces added since (push forwarding, docs site, status
+  page, alerts feed, monitoring host) in `docs/security-review.md`.
 - Forwarded Titan writes trust the replica's TLS verification of the client
   certificate (documented in `docs/replication.md`).
 
@@ -113,7 +114,9 @@ prototype and M6 desired state are done.
   token parameters from links anyway). Revisit if abuse appears.
 - Markdown-to-gemtext converter covers a practical subset only.
 - `receive-pack` uses git protocol v0 (git has no v2 push); fine.
-- No dual host-key rotation overlap yet (threat model T-36).
+- Host-key rotation overlap (T-36) exists (`ssh.previous_host_key_file`);
+  the TLS certificate still rotates without overlap (Gemini has no
+  equivalent; clients re-pin, `docs/runbooks/rotate-tls-certificate.md`).
 
 ## Human blockers
 

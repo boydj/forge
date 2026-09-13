@@ -35,6 +35,7 @@ module "node" {
   bgp_announce     = each.value.bgp_announce
   docs_repo        = var.docs_repo
   prometheus_url   = local.prometheus_url
+  offsite_bucket   = var.offsite_bucket
 
   operator_ssh_public_keys = coalesce(
     var.operator_ssh_public_keys,
@@ -53,6 +54,11 @@ output "cloud_init" {
 output "forge_toml" {
   description = "Rendered /etc/forge/forge.toml per POP."
   value       = { for name, n in module.node : name => n.forge_toml }
+}
+
+output "forge_backup_env" {
+  description = "Rendered /etc/default/forge-backup per POP (empty: no off-site copy)."
+  value       = { for name, n in module.node : name => n.forge_backup_env }
 }
 
 output "nftables_conf" {

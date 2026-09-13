@@ -1,0 +1,19 @@
+#!/bin/sh
+# forge-offsite FILE: copy one backup archive to object storage with rclone.
+# Called by forge-backup as OFFSITE_CMD (EnvironmentFile
+# /etc/default/forge-backup, rendered by modules/forge-node):
+#   OFFSITE_CMD=/usr/local/bin/forge-offsite
+#   OFFSITE_BUCKET=<bucket>            OFFSITE_PREFIX=<node name>
+# Credentials live only in tmpfs: /run/forge/secrets/rclone.conf (a "b2"
+# remote with the write-only key; scripts/deploy builds it from the bundle).
+# Exit status is the backup's: a failed copy fails forge-backup.service,
+# which NodeSystemdUnitFailed reports.
+set -eu
+file=${1:?archive}
+conf=${RCLONE_CONFIG:-/run/forge/secrets/rclone.conf}
+[ -s "$conf" ] || { echo "forge-offsite: no $conf (b2_backup_key_id/b2_backup_key not in the bundle?)" >&2; exit 1; }
+[ -n "${OFFSITE_BUCKET:-}" ] || { echo "forge-offsite: OFFSITE_BUCKET not set" >&2; exit 1; }
+dest="b2:${OFFSITE_BUCKET}/${OFFSITE_PREFIX:-$(hostname -s)}/"
+rclone --config "$conf" --cache-dir /var/lib/forge/tmp/rclone --contimeout 30s --timeout 5m --retries 3 \
+  copy "$file" "$dest"
+echo "forge-offsite: copied $(basename "$file") to $dest"

@@ -32,3 +32,8 @@ output "admin_ssh_port" {
   description = "Port scripts/deploy must use for OpenSSH."
   value       = var.admin_ssh_port
 }
+
+output "forge_backup_env" {
+  description = "Rendered /etc/default/forge-backup (empty when no off-site bucket is configured)."
+  value       = local.forge_backup_env
+}

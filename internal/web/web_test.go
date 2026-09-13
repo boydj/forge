@@ -748,7 +748,7 @@ func TestAlertsFeed(t *testing.T) {
 			return
 		}
 		fmt.Fprint(w, `{"status":"success","data":{"alerts":[
-		 {"labels":{"alertname":"DiskLow","pop":"sgp1","node":"sgp1","severity":"warn"},"annotations":{"summary":"sgp1 has 1.2GiB free on the data filesystem","description":"Below 2 GiB.","runbook":"docs/operations.md"},"state":"firing","activeAt":"2026-09-11T21:39:05.123Z","value":"1e+09"},
+		 {"labels":{"alertname":"DiskLow","pop":"sgp1","node":"sgp1","severity":"warn","instance":"[fda5:bc65:9bb1:1::3]:9100","job":"forge"},"annotations":{"summary":"sgp1 has 1.2GiB free on the data filesystem","description":"Below 2 GiB on [fda5:bc65:9bb1:1::3]:9100.","runbook":"docs/operations.md"},"state":"firing","activeAt":"2026-09-11T21:39:05.123Z","value":"1e+09"},
 		 {"labels":{"alertname":"NodeHighCPU","pop":"ams1"},"annotations":{"summary":"cpu"},"state":"pending","activeAt":"2026-09-11T22:00:00Z","value":"0.95"}]}}`)
 	}))
 	defer prom.Close()
@@ -757,7 +757,7 @@ func TestAlertsFeed(t *testing.T) {
 	if status != 20 {
 		t.Fatalf("/status/alerts: %d\n%s", status, body)
 	}
-	id := alertID(map[string]string{"alertname": "DiskLow", "pop": "sgp1", "node": "sgp1", "severity": "warn"})
+	id := alertID(map[string]string{"alertname": "DiskLow", "pop": "sgp1", "node": "sgp1", "severity": "warn", "instance": "[fda5:bc65:9bb1:1::3]:9100", "job": "forge"})
 	for _, w := range []string{"# forge alerts", "=> /status/alerts/" + id + " 2026-09-11 - FIRING DiskLow on sgp1: sgp1 has 1.2GiB free on the data filesystem"} {
 		if !strings.Contains(body, w) {
 			t.Errorf("missing %q in:\n%s", w, body)
@@ -769,6 +769,9 @@ func TestAlertsFeed(t *testing.T) {
 	status, _, body = h.get(h.url("/status/alerts/"+id), nil, "")
 	if status != 20 || !strings.Contains(body, "# FIRING DiskLow on sgp1") || !strings.Contains(body, "Firing since 2026-09-11 21:39 UTC") || !strings.Contains(body, "* alertname = DiskLow") || !strings.Contains(body, "Runbook: docs/operations.md") {
 		t.Errorf("alert page: %d\n%s", status, body)
+	}
+	if strings.Contains(body, "fda5:") || strings.Contains(body, "instance =") || strings.Contains(body, "job =") || !strings.Contains(body, "Below 2 GiB on [internal].") {
+		t.Errorf("alert page leaks internal labels or addresses:\n%s", body)
 	}
 	if status, _, body := h.get(h.url("/status/alerts/nope"), nil, ""); status != 20 || !strings.Contains(body, "no longer firing") {
 		t.Errorf("unknown alert: %d\n%s", status, body)

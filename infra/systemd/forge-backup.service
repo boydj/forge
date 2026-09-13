@@ -1,7 +1,8 @@
 # Daily backup: /usr/local/bin/forge-backup (infra/backup/forge-backup) calls
-# `forge admin backup` and writes an age-encrypted tar.zst under
-# /var/backups/forge, then prunes old ones. Off-site copy is a TODO in the
-# script (rclone to object storage, see docs/costs.md).
+# `forge admin backup` and writes an age-encrypted tar.gz under
+# /var/backups/forge, prunes old ones, and copies the new archive off-site
+# through OFFSITE_CMD from /etc/default/forge-backup (forge-offsite: rclone
+# to Backblaze B2 with a write-only key from tmpfs; docs/disaster-recovery.md).
 [Unit]
 Description=forge backup
 After=forge.service forge-secrets.service
@@ -17,6 +18,8 @@ Group=forge
 ExecStart=/usr/local/bin/forge-backup
 # backup recipient (public) comes from the tmpfs secrets directory (SR-02)
 Environment=RECIPIENT_FILE=/run/forge/secrets/backup.recipient
+# OFFSITE_CMD / OFFSITE_BUCKET / OFFSITE_PREFIX (absent: no off-site copy)
+EnvironmentFile=-/etc/default/forge-backup
 Nice=10
 IOSchedulingClass=idle
 CPUQuota=50%

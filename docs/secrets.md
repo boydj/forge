@@ -129,3 +129,12 @@ the reverse, plus `secrets rotate` of everything they could read.
 * The `deploy` user cannot read secrets and runs nothing as root except
   `forge-deploy-helper` (`infra/systemd/forge-deploy-helper`), which accepts
   only the binary, the data configs and the encrypted bundle on stdin.
+
+## Backblaze B2 keys (off-site backups)
+
+`b2_admin_key_id` / `b2_admin_key`: the operator's console key, used only
+by OpenTofu on the laptop (`infra/opentofu/environments/b2`) and exported by
+`scripts/secrets env`. `b2_backup_key_id` / `b2_backup_key`: the write-only
+bucket key OpenTofu creates; `scripts/deploy` turns it into
+`/run/forge/secrets/rclone.conf` on every node. Rotation: `tofu taint
+b2_application_key.writer && tofu apply`, update the bundle, deploy.

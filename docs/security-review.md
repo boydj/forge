@@ -427,3 +427,35 @@ threat model section 8.
   on `forge-backup.service`.
 - Required tests still missing (section 3) — the push corpus (test 3) and
   the Titan matrix (test 7) are the most valuable next additions.
+
+## 9. Re-review 2026-09-13 (M10, surfaces added since 2026-09-10)
+
+Scope: git push forwarding (`internal/repl/push.go`, `internal/sshd/forward.go`),
+the documentation site (`internal/web/docs.go`), the fleet status page,
+incidents and alerts feeds (`internal/web/status.go`, `alerts.go`,
+`internal/repl/status.go`), the stats loop and `forge admin release`
+(`cmd/forge`), the monitoring host (`infra/opentofu/modules/{vultr-monitor,
+monitor-node}`, `infra/cloud-init/monitor.yaml.tftpl`, `scripts/deploy
+monitor`), the mesh changes (`scripts/netgen`, `infra/firewall`), and the
+off-site backup path (`infra/backup/forge-offsite`, `forge-deploy-helper`
+`forge-backup.env`, `infra/opentofu/environments/b2`). Method as in section 0,
+plus a read of the live nodes' units and firewall.
+
+| ID | Severity | Where | Finding | Disposition |
+| --- | --- | --- | --- | --- |
+| SR-26 | Medium | web (alerts feed) | `/status/alerts/<id>` printed every Prometheus label and annotation of an alert, including `instance` (a WireGuard mesh address and port) and descriptions that interpolate them: the control network's addressing was public. | **Fixed**: an allowlist of labels (`alertname`, `pop`, `node`, `severity`, probe labels) and redaction of IPv6 literals in annotation text (`publicText`); test asserts no `fda5:` / `instance =` on the page. |
+| SR-27 | Low | status page | `/status/` publishes per-POP version strings, uptimes and replication lag. Version disclosure eases targeting of a known-vulnerable build; the rest is operational transparency the page exists for. | **Accepted**: the version is also in the release page and the repository; the status page is the operator's own transparency choice. Revisit if a build ever ships with a known unfixed vulnerability (rotate the version string or hide it). |
+| SR-28 | Low | push forwarding | The leader trusts the replica's assertion of the pushing user (account id, name, fingerprint) on `/v1/forward/receive-pack`, authenticated only by the shared cluster secret. A compromised replica can push as any user whose key it has accepted. | **Accepted, documented** (`docs/replication.md`): identical to the forwarded-Titan-writes model (T-37); the leader re-runs every other check. Same-secret peers are already fully trusted for metadata replication. |
+| SR-29 | Info | push forwarding | The hijacked control-plane connection reads stdin from the raw socket, not `bufrw.Reader` (net/http would cancel the request context on the replica's half-close). Frames are bounded (`maxFrame` 1 MiB) and `receive-pack` runs under `Config.SessionTimeout` and `receive.maxInputSize`; a slow or stalled replica holds a leader goroutine and one git slot until the session timeout. | **Accepted**: bounded by the same limits as a direct SSH push; git slots are the existing back-pressure. |
+| SR-30 | Info | docs site | `/docs/` reads a configured public repository only (anonymous `LookupRepo`, so a private repository is never published whatever certificate is presented); dot segments are normalised and anything escaping the tree is 404; git rejects invalid paths (`ErrBadPath`). Non-text blobs are served with a MIME type by extension. | No change. Note: the site serves whatever is pushed to the configured repository; only writers of that repository can change it. |
+| SR-31 | Info | control plane | `/v1/status` now carries the health snapshot and every node polls every peer every 30 s; the fleet view is served publicly by `/status/`. All of it is authenticated by the cluster secret on the mesh; the public page shows only derived fields (state, verdict, lag, version, uptime), never addresses. | No change. |
+| SR-32 | Low | monitoring host | mon1 exposes only 2200 (OpenSSH, rate-limited, keys only), 51820 (WireGuard) and ICMP; Prometheus binds `[::]:9090` and Grafana `127.0.0.1:3000`, with nftables admitting 9090/3000 from `lo` and `wg0` only. Its one secret (WireGuard key) is plaintext in `/etc/wireguard/wg0.conf` 0600 root, unlike the POPs' tmpfs bundle. Its host key was pinned by trust-on-first-use (no console read). | **Accepted**: blast radius of the key is read access to the POPs' metrics ports over the mesh. Operator action: compare the pinned fingerprint with the Vultr console once (`docs/status.md`). |
+| SR-33 | Info | mesh | The POPs' `/48` unicast addresses cannot be reached through the anycast catchment: the catching POP's forward chain drops and the receiving POP's WireGuard rejects third-party sources. This is a property, not a hole: the mesh carries only mesh-sourced traffic. The design text that assumed backhaul was corrected and the probes removed. | No change. |
+| SR-34 | Low | off-site backups | Nodes hold a B2 application key restricted to one bucket with `listBuckets, listFiles, writeFiles`: a compromised node can write (and thus create new versions of) archives and list names, but cannot read other nodes' archives (no `readFiles`) or delete anything (no `deleteFiles`); retention is the bucket lifecycle. Archives are age-encrypted before upload, so B2 never sees plaintext. `/etc/default/forge-backup` is validated by the helper to the three `OFFSITE_*` keys with `forge-offsite` as the only command. | No change. Note `listFiles` lets a node see other nodes' archive names (stamps only). |
+| SR-35 | Info | admin CLI | `forge admin release create|asset --as USER` runs with the acting user's permissions through the same domain checks as Titan; it is root-only in practice (`sudo -u forge` on the node) and writes an event naming the user. | No change. |
+
+Residual-risk sign-off (internal): the invariants of section 6 still hold
+on `main` at this date; SR-24 and SR-27/28/29/32/34 are accepted with the
+notes above. The external review of the SSH exec handler, Titan parser,
+pre-receive scanner and authorisation (M10, first checkbox) remains open
+and is the operator's to commission.

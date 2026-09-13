@@ -37,6 +37,7 @@ packages:
   - prometheus-node-exporter    # listens on :9101 (forge metrics own :9100), wg0-only via nftables
   - prometheus-bird-exporter    # BGP session state on :9324, wg0-only; unit below shadows the packaged one
   - sqlite3
+  - rclone                      # off-site backup copies (forge-offsite -> Backblaze B2)
 
 # OpenSSH: no passwords anywhere. root keeps the provider-injected bootstrap
 # key (prohibit-password); `deploy` is what scripts/deploy logs in as.
@@ -268,13 +269,18 @@ write_files:
           state.conf)    echo /etc/bird/state.conf 0640 bird;;
           wg0.conf)      echo /etc/wireguard/wg0.conf.in 0600 root;;
           secrets)       echo "$BUNDLE" 0600 root;;
-          *) die "write-config: unknown name '$1' (forge.toml nftables.conf bird.conf state.conf wg0.conf secrets)";;
+          forge-backup.env) echo /etc/default/forge-backup 0644 root;;
+          *) die "write-config: unknown name '$1' (forge.toml nftables.conf bird.conf state.conf wg0.conf secrets forge-backup.env)";;
         esac
       }
       check() { # check <name> <tmp>: non-zero (and a reason) for anything malformed or that would run as root
         case "$1" in
           nftables.conf) nft -c -f "$2";;
           secrets) [ "$(head -c 21 "$2")" = "age-encryption.org/v1" ] || { echo "secrets: not an age file" >&2; return 1; };;
+          forge-backup.env) # EnvironmentFile of forge-backup.service: only the three OFFSITE_* keys, only forge-offsite as the command
+            if grep -Ev '^(OFFSITE_CMD=/usr/local/bin/forge-offsite|OFFSITE_BUCKET=[A-Za-z0-9-]{6,63}|OFFSITE_PREFIX=[a-z0-9-]{1,32})$' "$2" | grep -q .; then
+              echo "forge-backup.env: unexpected line" >&2; return 1
+            fi;;
           wg0.conf) # wg-quick runs Pre*/Post* hooks as root: allow only the one line netgen emits
             if grep -Ei '^[[:space:]]*(Pre|Post)(Up|Down)|^[[:space:]]*SaveConfig' "$2" | grep -qvx 'PostUp = sysctl -q -w net.ipv6.conf.all.forwarding=1'; then
               echo "wg0.conf: unexpected hook line" >&2; return 1
@@ -330,7 +336,7 @@ write_files:
           echo "no $BUNDLE yet (run scripts/deploy); nothing to decrypt" >&2
         fi
         install -d -m 0700 -o forge -g forge "$new" "$new/tls" "$new/ssh"
-        for f in tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient; do
+        for f in tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient rclone.conf; do
           [ -f "$stage/$f" ] && install -m 0400 -o forge -g forge "$stage/$f" "$new/$f"
         done
         rm -rf "$sec.old"; [ -d "$sec" ] && mv "$sec" "$sec.old"; mv "$new" "$sec"; rm -rf "$sec.old"
@@ -386,7 +392,6 @@ write_files:
         status)         [ $# -eq 0 ] || die "status takes no arguments"; cmd_status;;
         *) die "unknown verb '$verb'";;
       esac
-
   # --- Firewall (nftables package ships a default /etc/nftables.conf: defer).
   - path: /etc/nftables.conf
     permissions: "0755"

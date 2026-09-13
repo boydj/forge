@@ -29,6 +29,9 @@ locals {
   }
   nftables_conf = templatefile("${local.repo_root}/infra/firewall/nftables.conf.tftpl", local.nftables_vars)
 
+  # /etc/default/forge-backup: off-site copy settings (docs/disaster-recovery.md).
+  forge_backup_env = var.offsite_bucket == "" ? "" : "OFFSITE_CMD=/usr/local/bin/forge-offsite\nOFFSITE_BUCKET=${var.offsite_bucket}\nOFFSITE_PREFIX=${var.name}\n"
+
   forge_toml = templatefile("${local.repo_root}/infra/cloud-init/forge.toml.tftpl", {
     node               = var.name
     service_hostname   = var.service_hostname

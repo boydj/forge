@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -30,6 +31,10 @@ const (
 	alertsTTL     = 30 * time.Second
 	alertsTimeout = 5 * time.Second
 )
+
+// publicLabels are the alert labels shown on the public pages. Anything
+// else (instance, job, control-network addresses) stays internal.
+var publicLabels = map[string]bool{"alertname": true, "pop": true, "node": true, "severity": true, "family": true, "port": true, "target_kind": true, "path": true, "name": true, "proto": true}
 
 // Alert is one firing alert as Prometheus reports it.
 type Alert struct {
@@ -201,7 +206,7 @@ func (h *Handler) alertFeed(req *request, atom bool) {
 		if i == 0 {
 			f.Updated = a.ActiveAt.UTC().Format(time.RFC3339)
 		}
-		f.Entries = append(f.Entries, atomEntry{Title: a.title(), ID: u, Updated: a.ActiveAt.UTC().Format(time.RFC3339), Link: atomLink{Href: u}, Summary: a.Annotations["description"]})
+		f.Entries = append(f.Entries, atomEntry{Title: a.title(), ID: u, Updated: a.ActiveAt.UTC().Format(time.RFC3339), Link: atomLink{Href: u}, Summary: publicText(a.Annotations["description"])})
 	}
 	_ = req.w.Header(gemini.StatusSuccess, "application/atom+xml; charset=utf-8")
 	_, _ = req.w.Write([]byte(xml.Header))
@@ -228,7 +233,7 @@ func (h *Handler) alertPage(req *request, id string) {
 		if s := a.Labels["severity"]; s != "" {
 			p.Text("Severity: " + s)
 		}
-		if d := a.Annotations["description"]; d != "" {
+		if d := publicText(a.Annotations["description"]); d != "" {
 			p.Blank()
 			p.Text(d)
 		}
@@ -239,7 +244,9 @@ func (h *Handler) alertPage(req *request, id string) {
 		p.Heading(2, "Labels")
 		keys := make([]string, 0, len(a.Labels))
 		for k := range a.Labels {
-			keys = append(keys, k)
+			if publicLabels[k] {
+				keys = append(keys, k)
+			}
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
@@ -258,4 +265,14 @@ func (h *Handler) alertPage(req *request, id string) {
 	p.Link("/status/", "status")
 	h.footer(p, req)
 	req.send(p)
+}
+
+// meshAddr matches the control-network addresses (mesh /64 and bracketed
+// IPv6 literals with a port) that rule annotations may interpolate.
+var meshAddr = regexp.MustCompile(`\[?[0-9a-f]{1,4}(?::[0-9a-f]{0,4}){2,7}\]?(?::\d+)?`)
+
+// publicText redacts control-network addresses from annotation text so
+// the public status pages never expose the mesh.
+func publicText(s string) string {
+	return meshAddr.ReplaceAllString(s, "[internal]")
 }

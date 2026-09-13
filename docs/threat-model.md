@@ -743,8 +743,8 @@ M9 - Hardening and abuse tooling
 - [ ] Rate-limit tuning, spam controls, abuse contact published (T-46, T-47)
 
 M10 - Pre-launch audit
-- [ ] Execute the full security test list (section 7); external review of SSH exec handler, Titan parser, pre-receive scanner, authz
-- [ ] Threat model re-review; residual risk sign-off
+- [ ] External review of SSH exec handler, Titan parser, pre-receive scanner, authz (the internal pass and the section 7 tests that exist are in `docs/security-review.md`)
+- [x] Threat model re-review; residual risk sign-off (internal, 2026-09-13: `docs/security-review.md` section 9; SR-24, 27, 28, 29, 32, 34 accepted)
 
 ---
 
@@ -818,6 +818,8 @@ Static / supply chain (CI):
 - First-contact TOFU is defeated by a hijack or DNS compromise at the moment of first contact. Mitigated by out-of-band fingerprint publication; not eliminated.
 - Volumetric DDoS beyond aggregate POP capacity is outside our control; anycast and provider filtering are the only levers.
 - Provider (Vultr) has physical access; disk encryption does not protect against a live memory dump. Accepted.
+- Forwarded pushes (2026-09-11): a replica relays `receive-pack` to the leader over the control plane and asserts the pusher's identity; the leader trusts it as it trusts forwarded Titan writes (SR-28). Accepted.
+- Public status and alerts pages (2026-09-11): operational state is public by design; labels are allowlisted and control-network addresses redacted (SR-26).
 - Open: whether to forward git pushes from replicas (proxy) after v1, and the exact attestation format; whether to allow partial clone filters; whether user gemtext links should be rendered as links at all or as plain text for new accounts.
 
 

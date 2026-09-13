@@ -131,3 +131,9 @@ variable "docs_repo" {
   type        = string
   default     = "jdb/forge"
 }
+
+variable "offsite_bucket" {
+  description = "B2 bucket for off-site backups; empty until the writer key is in the bundle (docs/runbooks/enable-offsite-backups.md)."
+  type        = string
+  default     = ""
+}
