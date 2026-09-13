@@ -5,6 +5,28 @@ Operations, newest first.
 
 ## Unreleased
 
+## v0.1.1 - 2026-09-13
+
+### Added
+- Automatic mirroring to an external git remote after every push and
+  hourly (`[[mirrors]]`, `forge admin repo mirror`, `MirrorStale` alert);
+  enabled once `mirror_deploy_key` is in the bundle
+  (`docs/runbooks/enable-mirroring.md`).
+- Off-site backups to Backblaze B2 as code: bucket and write-only key
+  (`infra/opentofu/environments/b2`), `forge-offsite` from `forge-backup`,
+  credentials in tmpfs; enabled by `offsite_bucket`
+  (`docs/runbooks/enable-offsite-backups.md`).
+- `forge admin release create|asset`; certificate-expiry warning.
+
+### Fixed
+- The public alert pages showed every Prometheus label, including
+  control-network addresses; they now show an allowlist and redact IPv6
+  literals (security review SR-26).
+
+### Operations
+- Security re-review of the surfaces added since 2026-09-10
+  (`docs/security-review.md` section 9); first restore drill.
+
 ## v0.1.0 - 2026-09-12
 
 First release: the forge serves gemini://git.as215520.net/ anycast from
