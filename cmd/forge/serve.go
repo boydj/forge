@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"as215520.net/forge/internal/gemini"
 	"as215520.net/forge/internal/health"
 	"as215520.net/forge/internal/metrics"
+	"as215520.net/forge/internal/mirror"
 	"as215520.net/forge/internal/repl"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/tlsid"
@@ -105,6 +107,23 @@ func runServe(args []string) error {
 		handler.Fleet = fleetSource{rn: rn}
 	}
 
+	// Mirroring to external remotes (docs/dogfooding.md): the repository's
+	// leader pushes after every push and on the reconcile interval. Chained
+	// after replication's OnPush so both run.
+	mw := newMirrorWorker(cfg, app, reg, log)
+	if mw.Enabled() {
+		prev := app.OnPush
+		app.OnPush = func(r *store.Repo) {
+			if prev != nil {
+				prev(r)
+			}
+			mw.OnPush(r)
+		}
+		log.Info("mirroring enabled", "mirrors", len(cfg.Mirrors), "interval", cfg.Mirror.Interval.Duration.String())
+	} else if len(cfg.Mirrors) > 0 {
+		log.Warn("mirroring disabled", "reason", mw.Reason())
+	}
+
 	for _, addr := range cfg.Gemini.Listen {
 		l, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -140,6 +159,7 @@ func runServe(args []string) error {
 
 	go maintenanceLoop(ctx, app, log)
 	go statsLoop(ctx, cfg, app, reg, log)
+	go mw.Run(ctx)
 	hctx, hcancel := context.WithCancel(context.Background())
 	hwDone := make(chan struct{})
 	go func() { defer close(hwDone); hw.Run(hctx) }()
@@ -291,6 +311,23 @@ func maintenanceLoop(ctx context.Context, app *forge.Forge, log *slog.Logger) {
 			}
 		}
 	}
+}
+
+// newMirrorWorker builds the mirror worker from the configuration; admin
+// `repo mirror` uses the same construction.
+func newMirrorWorker(cfg *config.Config, app *forge.Forge, reg *metrics.Registry, log *slog.Logger) *mirror.Worker {
+	return mirror.New(mirror.Options{
+		Targets: cfg.MirrorTargets(), KeyFile: cfg.Mirror.KeyFile, KnownHostsFile: cfg.Mirror.KnownHostsFile,
+		Interval: cfg.Mirror.Interval.Duration, ReposDir: cfg.ReposDir(), Git: app.Git, Store: app.Store, Metrics: reg, Log: log,
+		Leads: func(ctx context.Context, repo string) (bool, error) {
+			owner, name, _ := strings.Cut(repo, "/")
+			r, err := app.Store.RepoByPath(ctx, owner, name)
+			if err != nil {
+				return false, err
+			}
+			return app.IsLeader(r), nil
+		},
+	})
 }
 
 // newestBackup is the modification time of the newest forge-backup archive

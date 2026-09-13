@@ -73,6 +73,9 @@ From `internal/metrics/metrics.go` (also listed in `docs/operations.md`):
 | `forge_leader_repositories` (gauge) | | replication row |
 | `forge_healthy`, `forge_bgp_announced` (gauge) | | availability group |
 | `forge_backup_age_seconds` (gauge) | | `BackupStale` |
+| `forge_mirror_pushes_total` (counter) | `result` (ok/error) | mirroring row |
+| `forge_mirror_last_success_seconds` (gauge) | `repo` | `MirrorStale` (26 h without a successful mirror push, held 1 h) |
+| `forge_mirrors_configured` (gauge) | | |
 | `forge_hook_decisions_total` (counter) | `hook`, `decision` | `HookDenialsSpike` |
 
 The storage gauges (`forge_disk_free_bytes`, `forge_repositories`,

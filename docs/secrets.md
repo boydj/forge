@@ -52,14 +52,17 @@ every `deploy`):
 
 ```
 /run/forge/                       0755 root   (RuntimeDirectory of forge-secrets.service)
-  secrets/                        0700 forge  tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient
+  secrets/                        0700 forge  tls/server.key tls/server.crt ssh/host_ed25519 cluster.secret backup.recipient mirror.key
   wg0.conf                        0600 root   /etc/wireguard/wg0.conf.in with __WG_PRIVATE_KEY__ filled; /etc/wireguard/wg0.conf -> here
   bird.conf                       0640 bird   /etc/bird/bird.conf.in with __BGP_MD5__ filled;           /etc/bird/bird.conf -> here
 ```
 
-`forge.toml` points `cert_file`, `key_file`, `host_key_file` and
-`secret_file` into `/run/forge/secrets/`; `forge-backup.service` reads the
-backup recipient from there too. The generated `bird.conf` / `wg0.conf`
+`forge.toml` points `cert_file`, `key_file`, `host_key_file`,
+`secret_file` and `mirror.key_file` into `/run/forge/secrets/`;
+`forge-backup.service` reads the backup recipient from there too.
+`mirror.key` is the bundle's `mirror_deploy_key` (an ed25519 deploy key
+with write access on the GitHub mirror, `docs/runbooks/enable-mirroring.md`);
+when the bundle has none the file is absent and mirroring is disabled. The generated `bird.conf` / `wg0.conf`
 stay on disk as `.in` files with their placeholders; while a placeholder is
 unfilled (no secret shipped, or `netgen --overrides` not run) the rendered
 file is removed and the unit fails to start, which is the safe direction

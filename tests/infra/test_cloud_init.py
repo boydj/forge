@@ -96,6 +96,7 @@ def render_toml():
             "control_listen": "[fd42::1]:9200",
             "docs_repo": "jdb/forge",
             "prometheus_url": "http://[fd42::fa]:9090",
+            "mirrors_toml": '[[mirrors]]\nrepo = "jdb/forge"\nurl = "git@github.com:boydj/forge.git"\n',
         },
         {},
     )

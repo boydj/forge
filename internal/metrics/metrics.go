@@ -36,6 +36,10 @@ type Registry struct {
 	Announced     prometheus.Gauge
 	BackupAge     prometheus.Gauge
 	HookDecisions *prometheus.CounterVec
+	// Mirroring (internal/mirror).
+	MirrorPushes      *prometheus.CounterVec
+	MirrorLastSuccess *prometheus.GaugeVec
+	MirrorsConfigured prometheus.Gauge
 }
 
 // New builds a registry with process/go collectors.
@@ -61,6 +65,9 @@ func New() *Registry {
 	r.Announced = f.gauge("forge_bgp_announced", "1 when anycast prefixes are announced by this node.")
 	r.BackupAge = f.gauge("forge_backup_age_seconds", "Age of the newest successful backup.")
 	r.HookDecisions = f.counterVec("forge_hook_decisions_total", "Push hook decisions.", "hook", "decision")
+	r.MirrorPushes = f.counterVec("forge_mirror_pushes_total", "Mirror pushes to external remotes by result.", "result")
+	r.MirrorLastSuccess = f.gaugeVec("forge_mirror_last_success_seconds", "Unix time of the last successful mirror push, per repository.", "repo")
+	r.MirrorsConfigured = f.gauge("forge_mirrors_configured", "Repositories with a configured mirror on this node.")
 	return r
 }
 

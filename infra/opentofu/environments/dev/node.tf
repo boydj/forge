@@ -36,6 +36,7 @@ module "node" {
   docs_repo        = var.docs_repo
   prometheus_url   = local.prometheus_url
   offsite_bucket   = var.offsite_bucket
+  mirrors          = var.mirrors
 
   operator_ssh_public_keys = coalesce(
     var.operator_ssh_public_keys,

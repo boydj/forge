@@ -35,6 +35,7 @@ node exporter on 9101, cluster RPC on 9200, all reachable from wg0 only.
 | [incident-checklist.md](incident-checklist.md) | anything is wrong and you do not know what yet |
 | [deploy-first-node.md](deploy-first-node.md) | bringing up a new environment or the first node from zero |
 | [network-bootstrap.md](network-bootstrap.md) | enabling BGP, WireGuard mesh and anycast for a POP |
+| [enable-mirroring.md](enable-mirroring.md) | turning on the GitHub mirror: deploy key into the bundle, pinned host keys, `[[mirrors]]`, verification |
 | [deploy-monitor.md](deploy-monitor.md) | bringing up or refreshing the monitoring host (Prometheus, blackbox, Grafana) and bird_exporter on the POPs |
 | [upgrade-and-rollback.md](upgrade-and-rollback.md) | shipping a new binary or config; reverting one |
 | [drain-pop.md](drain-pop.md) | taking a POP out of (or back into) anycast rotation |
