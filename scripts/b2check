@@ -7,34 +7,58 @@ set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUNDLE=${1:-$ROOT/infra/secrets/dev.enc.yaml}
 DESIRED=$ROOT/infra/backup/b2.yaml
-id=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_backup_key_id); key=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_backup_key)
-[ -n "$id" ] && [ -n "$key" ] || { echo "b2check: b2_backup_key_id/b2_backup_key not in $BUNDLE" >&2; exit 2; }
-auth=$(curl -fsS -u "$id:$key" https://api.backblazeb2.com/b2api/v3/b2_authorize_account)
-python3 - "$auth" "$DESIRED" <<'PY'
+wid=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_backup_key_id); wkey=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_backup_key)
+rid=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_restore_key_id); rkey=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_restore_key)
+[ -n "$wid" ] && [ -n "$wkey" ] || { echo "b2check: b2_backup_key_id/b2_backup_key not in $BUNDLE" >&2; exit 2; }
+wauth=$(curl -fsS -u "$wid:$wkey" https://api.backblazeb2.com/b2api/v3/b2_authorize_account)
+rauth=""; [ -n "$rid" ] && [ -n "$rkey" ] && rauth=$(curl -fsS -u "$rid:$rkey" https://api.backblazeb2.com/b2api/v3/b2_authorize_account)
+python3 - "$wauth" "$rauth" "$DESIRED" <<'PY'
 import json, sys, urllib.request, yaml
-auth = json.loads(sys.argv[1]); want = yaml.safe_load(open(sys.argv[2]))
-api = auth["apiInfo"]["storageApi"]; token = auth["authorizationToken"]
-allowed = api.get("allowed", {})
-caps = sorted(allowed.get("capabilities", []))
+wauth = json.loads(sys.argv[1]); rauth = json.loads(sys.argv[2]) if sys.argv[2] else None
+want = yaml.safe_load(open(sys.argv[3])); w = want["bucket"]
 bad = 0
 def check(cond, msg):
     global bad
     print(("ok   " if cond else "DRIFT") + " " + msg)
     if not cond: bad += 1
-w = want["bucket"]
-check("deleteFiles" not in caps and "readFiles" not in caps, f"writer key cannot read or delete (capabilities {caps})")
-check(allowed.get("bucketName") == w["name"], f"writer key restricted to bucket {w['name']} (is {allowed.get('bucketName')})")
-req = urllib.request.Request(api["apiUrl"] + "/b2api/v3/b2_list_buckets", data=json.dumps({"accountId": auth["accountId"], "bucketName": w["name"]}).encode(), headers={"Authorization": token, "Content-Type": "application/json"})
-buckets = json.load(urllib.request.urlopen(req, timeout=30))["buckets"]
-check(len(buckets) == 1, f"bucket {w['name']} exists")
-if buckets:
-    b = buckets[0]
+def api(auth):  # v3 puts the key's restrictions directly under storageApi (v2 had "allowed")
+    a = auth["apiInfo"]["storageApi"]; return a, (a.get("allowed") or a), auth["authorizationToken"]
+def buckets(auth):
+    a, _, token = api(auth)
+    req = urllib.request.Request(a["apiUrl"] + "/b2api/v3/b2_list_buckets", data=json.dumps({"accountId": auth["accountId"], "bucketName": w["name"]}).encode(), headers={"Authorization": token, "Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=30))["buckets"]
+# writer key
+_, wallowed, _ = api(wauth)
+wcaps = sorted(wallowed.get("capabilities") or [])
+check("readFiles" not in wcaps, f"writer key cannot read archives (capabilities {wcaps})")
+check(wallowed.get("bucketName") == w["name"], f"writer key restricted to bucket {w['name']} (is {wallowed.get('bucketName')})")
+if "deleteFiles" in wcaps or "writeBucketLifecycleRules" in wcaps:
+    print("note  writer key can delete files / change lifecycle (console preset): Object Lock below is the control")
+bs = buckets(wauth)
+check(len(bs) == 1, f"bucket {w['name']} exists")
+if bs:
+    b = bs[0]
     check(b.get("bucketType") == w["type"], f"bucket type {w['type']} (is {b.get('bucketType')})")
-    rules = b.get("lifecycleRules", [])
-    lc = w["lifecycle"]
+    lc = w["lifecycle"]; rules = b.get("lifecycleRules", [])
     check(any(r.get("daysFromUploadingToHiding") == lc["days_from_uploading_to_hiding"] and r.get("daysFromHidingToDeleting") == lc["days_from_hiding_to_deleting"] and not r.get("fileNamePrefix") for r in rules),
           f"lifecycle hide after {lc['days_from_uploading_to_hiding']} d, delete {lc['days_from_hiding_to_deleting']} d later (is {rules})")
-    enc = (b.get("defaultServerSideEncryption") or {}).get("value") or {}
-    check(enc.get("mode") == w["encryption"], f"default encryption {w['encryption']} (is {enc.get('mode')})")
+# bucket settings that need read capabilities: use the reader key when present
+src = buckets(rauth)[0] if rauth else b if bs else {}
+who = "reader key" if rauth else "writer key"
+sse = src.get("defaultServerSideEncryption") or {}
+if sse.get("isClientAuthorizedToRead") is False:
+    print(f"skip  default encryption: the {who} may not read it (console: {w['encryption']})")
+else:
+    check((sse.get("value") or {}).get("mode") == w["encryption"], f"default encryption {w['encryption']} (is {(sse.get('value') or {}).get('mode')})")
+lock = src.get("fileLockConfiguration") or {}
+ol = w.get("object_lock") or {}
+if lock.get("isClientAuthorizedToRead") is False:
+    print(f"skip  object lock: the {who} may not read it (console: {ol.get('mode')} mode, {ol.get('default_retention_days')} days default retention)")
+elif ol:
+    v = lock.get("value") or {}
+    ret = v.get("defaultRetention") or {}
+    days = (ret.get("period") or {}).get("duration") if (ret.get("period") or {}).get("unit") == "days" else None
+    check(v.get("isFileLockEnabled") is True, f"object lock enabled (is {v.get('isFileLockEnabled')})")
+    check((ret.get("mode") or "").lower() == ol["mode"] and days == ol["default_retention_days"], f"object lock default retention {ol['mode']} {ol['default_retention_days']} days (is {ret.get('mode')} {days})")
 sys.exit(1 if bad else 0)
 PY

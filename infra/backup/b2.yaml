@@ -14,9 +14,20 @@ bucket:
     days_from_uploading_to_hiding: 30
     days_from_hiding_to_deleting: 1
   encryption: SSE-B2          # server-side, in addition to the age encryption of every archive
+  # Object Lock (bucket settings, can be enabled on an existing bucket):
+  # every uploaded version is undeletable for the default retention, by any
+  # key. This is the control against a compromised node: the console's
+  # "Write Only" key preset includes deleteFiles and
+  # writeBucketLifecycleRules, and the console cannot make a narrower key.
+  # Governance mode keeps the account owner able to bypass; nodes cannot.
+  object_lock:
+    mode: governance
+    default_retention_days: 35   # >= lifecycle hide + delete, so the lifecycle never fights the lock
 keys:
-  # Both restricted to the bucket above ("Allow access to Bucket(s)").
+  # Both restricted to the bucket above ("Allow access to Bucket(s)"), made
+  # with the console presets; the capabilities listed are what those presets
+  # actually grant (scripts/b2check prints the real list).
   - name: forge-backup-writer   # bundle: b2_backup_key_id / b2_backup_key -> every node (tmpfs rclone.conf)
-    capabilities: [listBuckets, listFiles, writeFiles]     # no readFiles: a node cannot read other nodes' archives; no deleteFiles
-  - name: forge-backup-reader   # bundle: b2_restore_key_id / b2_restore_key -> laptop only (restore drills)
-    capabilities: [listBuckets, listFiles, readFiles]
+    preset: Write Only          # listBuckets, listFiles?, writeFiles, deleteFiles, writeBucket* : no readFiles
+  - name: forge-backup-reader   # bundle: b2_restore_key_id / b2_restore_key -> laptop only (restore drills, b2check)
+    preset: Read Only           # listBuckets, listFiles, readFiles, readBucket*

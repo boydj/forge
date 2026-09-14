@@ -15,6 +15,9 @@ conf=${RCLONE_CONFIG:-/run/forge/secrets/rclone.conf}
 [ -s "$conf" ] || { echo "forge-offsite: no $conf (b2_backup_key_id/b2_backup_key not in the bundle?)" >&2; exit 1; }
 [ -n "${OFFSITE_BUCKET:-}" ] || { echo "forge-offsite: OFFSITE_BUCKET not set" >&2; exit 1; }
 dest="b2:${OFFSITE_BUCKET}/${OFFSITE_PREFIX:-$(hostname -s)}/"
+# --no-check-dest: the write-only key has no readFiles, so rclone must not
+# HEAD the destination before uploading (it would get 401); archives have
+# unique names, so there is nothing to compare anyway.
 rclone --config "$conf" --cache-dir /var/lib/forge/tmp/rclone --contimeout 30s --timeout 5m --retries 3 \
-  copy "$file" "$dest"
+  --no-check-dest copy "$file" "$dest"
 echo "forge-offsite: copied $(basename "$file") to $dest"
