@@ -32,6 +32,7 @@ Gemini/Titan paths (host `git.<zone>`):
 /~user/repo/releases/feed
 /~user/repo/releases/<tag>
 /account                           identity, certificates, SSH keys
+<path>/_/<token>                   query-driven write, gated by an action token (docs/titan.md)
 /account/keys
 /status                            node health (public, terse)
 ```

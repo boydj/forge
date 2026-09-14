@@ -144,10 +144,19 @@ query. Typed confirmation alone therefore proves nothing. Every
 query-driven state change (`/new`, `/account/register`, `/account/enrol`,
 key removal, certificate revocation, issue close/reopen, comment and
 release deletion, repository settings) is served only under
-`/_/<token>/<path>`, where the token is an HMAC of the acting identity
+`<path>/_/<token>`, where the token is an HMAC of the acting identity
 (account id, or certificate key before registration), the path and the
 UTC day, keyed with a per-node or cluster secret. A request without the
 token is redirected to the tokenised path with the query dropped, which
 forces the client to show the INPUT prompt; a request with a wrong token is
 redirected to the plain path. Tokens are valid for two days and never
 appear in page content, so a third party cannot construct one.
+
+The token is a **suffix** of the resource's own path, not a `/_/<token>/`
+prefix at the root as in v0.1.1 and earlier. Clients scope an identity to a
+URL prefix, so a token path outside that prefix was requested without the
+certificate the token is bound to: it could never verify, the server
+redirected back to the plain path, and that re-issued a token. Certificate
+enrolment from an identity scoped to `/account` looped until it hit the
+client's redirect limit. Keeping the token under the resource keeps the
+certificate attached to it.

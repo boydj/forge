@@ -5,6 +5,15 @@ Operations, newest first.
 
 ## Unreleased
 
+## v0.1.2 - 2026-09-14
+
+### Fixed
+- Action tokens are a suffix of the resource's path (`<path>/_/<token>`)
+  instead of a `/_/<token>/` prefix at the root. A client that scopes its
+  identity to a URL prefix did not send the certificate on the old path,
+  so the token could never verify and every query-driven write (including
+  certificate enrolment) ended in a redirect loop (security review SR-36).
+
 ## v0.1.1 - 2026-09-13
 
 ### Added

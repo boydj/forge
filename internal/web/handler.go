@@ -181,6 +181,32 @@ func (req *request) actionIdentity() string {
 	return "c" + req.Fingerprint
 }
 
+// actionBase normalises the path an action token is computed over: no
+// trailing slash, "/" for the root.
+func actionBase(p string) string {
+	p = strings.TrimSuffix(p, "/")
+	if p == "" {
+		return "/"
+	}
+	return p
+}
+
+// isActionToken reports whether s has the shape actionToken produces (32
+// lower-case hex characters). A repository file whose path happened to end
+// in "_/<32 hex>" would be mistaken for one and redirected to its parent
+// directory; nothing is disclosed and no state changes.
+func isActionToken(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func (h *Handler) actionToken(identity, path string, day time.Time) string {
 	mac := hmac.New(sha256.New, h.secret)
 	fmt.Fprintf(mac, "%s\n%s\n%s", day.UTC().Format("2006-01-02"), identity, path)
@@ -207,8 +233,9 @@ func (req *request) action(h *Handler, prompt string, sensitive bool) (string, b
 		return "", false
 	}
 	if !req.actionOK {
-		tok := h.actionToken(req.actionIdentity(), req.URL.Path, time.Now())
-		_ = gemini.Redirect(req.w, "/_/"+tok+req.URL.Path)
+		p := actionBase(req.URL.Path)
+		tok := h.actionToken(req.actionIdentity(), p, time.Now())
+		_ = gemini.Redirect(req.w, p+"/_/"+tok)
 		return "", false
 	}
 	q := strings.TrimSpace(req.Query())
@@ -258,18 +285,24 @@ func (h *Handler) ServeGemini(ctx context.Context, w gemini.ResponseWriter, r *g
 		return
 	}
 	req.segs = splitPath(path)
-	if len(req.segs) >= 2 && req.segs[0] == "_" {
-		rest := "/" + strings.Join(req.segs[2:], "/")
-		if strings.HasSuffix(path, "/") && rest != "/" {
-			rest += "/"
-		}
-		if !h.verifyAction(req.actionIdentity(), rest, req.segs[1]) {
+	// An action token sits under the resource it authorises
+	// (<path>/_/<token>), never at the root: clients scope an identity to a
+	// URL prefix, and a token path outside that prefix is requested without
+	// the certificate the token is bound to, so it could never verify (the
+	// certificate-less request redirected back, and the plain path issued a
+	// new token: a redirect loop).
+	if n := len(req.segs); n >= 2 && req.segs[n-2] == "_" && isActionToken(req.segs[n-1]) {
+		tok, segs := req.segs[n-1], req.segs[:n-2]
+		rest := actionBase("/" + strings.Join(segs, "/"))
+		if !h.verifyAction(req.actionIdentity(), rest, tok) {
+			// Drops any query, so the plain path re-issues a token and the
+			// client must type the value at the INPUT prompt.
 			_ = gemini.Redirect(w, rest)
 			return
 		}
 		req.actionOK = true
 		r.URL.Path = rest
-		req.segs = req.segs[2:]
+		req.segs = segs
 	}
 	if r.IsTitan() {
 		h.serveTitan(req)

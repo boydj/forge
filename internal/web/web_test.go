@@ -124,7 +124,7 @@ func (h *harness) get(rawurl string, cert *tls.Certificate, body string) (int, s
 func (h *harness) act(path string, cert *tls.Certificate, value string) (int, string, string) {
 	h.t.Helper()
 	status, meta, body := h.get(h.url(path), cert, "")
-	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+	if status != 30 || !strings.Contains(meta, "/_/") {
 		return status, meta, body
 	}
 	tokPath := meta
@@ -259,7 +259,7 @@ func TestRegistrationAndKeys(t *testing.T) {
 	}
 	// A pre-filled query never registers: the action redirect drops it.
 	status, meta, _ := h.get(h.url("/account/register?mallory"), &cert, "")
-	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+	if status != 30 || !strings.Contains(meta, "/_/") {
 		t.Fatalf("expected action redirect, got %d %s", status, meta)
 	}
 	if status, _, _ := h.get(h.url(meta), &cert, ""); status != 10 {
@@ -269,7 +269,7 @@ func TestRegistrationAndKeys(t *testing.T) {
 		t.Fatal("pre-filled query registered an account")
 	}
 	// A forged token is rejected (redirected back to the plain path).
-	if status, meta, _ := h.get(h.url("/_/0123456789abcdef0123456789abcdef/account/register?x"), &cert, ""); status != 30 || meta != "/account/register" {
+	if status, meta, _ := h.get(h.url("/account/register/_/0123456789abcdef0123456789abcdef?x"), &cert, ""); status != 30 || meta != "/account/register" {
 		t.Fatalf("forged token: %d %s", status, meta)
 	}
 	if status, _, _ := h.get(strings.Replace(h.url("/"), "localhost", "evil.example", 1), nil, ""); status != 53 {
@@ -426,7 +426,7 @@ func TestIssuesOverTitan(t *testing.T) {
 	}
 	// Bob (author) may close via INPUT confirmation; a bare request only prompts.
 	status, meta, _ = h.get(h.url("/~alice/proj/issues/1/close?close"), &bob, "")
-	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+	if status != 30 || !strings.Contains(meta, "/_/") {
 		t.Fatalf("pre-filled close must redirect: %d %s", status, meta)
 	}
 	status, _, _ = h.act("/~alice/proj/issues/1/close", &bob, "nope")
@@ -807,5 +807,35 @@ func TestCertExpiryNotice(t *testing.T) {
 	// Anonymous pages never warn.
 	if _, _, body := h.get(h.url("/"), nil, ""); strings.Contains(body, "Warning: your certificate") {
 		t.Errorf("anonymous front page warns")
+	}
+}
+
+// TestActionTokenScope pins the property that broke certificate enrolment on
+// a client scoping its identity to a path prefix: the token path must stay
+// under the resource it authorises, so the certificate is still sent.
+func TestActionTokenScope(t *testing.T) {
+	h := newHarness(t)
+	cert := clientCert(t, "alice")
+	status, meta, _ := h.get(h.url("/account/enrol"), &cert, "")
+	if status != 30 {
+		t.Fatalf("enrol: %d %s", status, meta)
+	}
+	if !strings.HasPrefix(meta, "/account/enrol/_/") {
+		t.Fatalf("token path %q leaves the resource's prefix; a scoped identity would not be sent", meta)
+	}
+	// With the certificate, the token verifies and the prompt appears.
+	if status, _, _ := h.get(h.url(meta), &cert, ""); status != 11 {
+		t.Errorf("token path with certificate: %d, want 11", status)
+	}
+	// Without it the token cannot verify: one redirect back, never a loop
+	// into another token path.
+	status, meta2, _ := h.get(h.url(meta), nil, "")
+	if status != 30 || meta2 != "/account/enrol" {
+		t.Errorf("token path without certificate: %d %s", status, meta2)
+	}
+	// A repository path that merely looks like one is unaffected.
+	h.seedRepo("bob", "proj")
+	if status, _, _ := h.get(h.url("/~bob/proj/tree/main/"), nil, ""); status != 20 {
+		t.Errorf("tree listing: %d", status)
 	}
 }

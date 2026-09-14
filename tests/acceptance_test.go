@@ -515,7 +515,7 @@ func registeredCert(t *testing.T, n *node, user string) tls.Certificate {
 func (n *node) act(path string, cert *tls.Certificate, value string) (int, string, string) {
 	n.t.Helper()
 	status, meta, body := n.request("gemini", path, cert, "")
-	if status != 30 || !strings.HasPrefix(meta, "/_/") {
+	if status != 30 || !strings.Contains(meta, "/_/") {
 		return status, meta, body
 	}
 	tokPath := meta
