@@ -195,3 +195,16 @@ The dev compose stack (`infra/monitoring/dev/`) is unchanged: it points
 Grafana at `host.docker.internal` and scrapes `scripts/dev-cluster` nodes;
 the production provisioning files under `infra/monitoring/grafana/` are the
 ones `deploy monitor` ships.
+
+### Reaching Prometheus and Grafana from the operator host
+
+The operator host is not a mesh member on purpose: a tunnel is outbound
+only, so a compromised node gets no path back to the machine that holds
+the age key and the deploy keys. A user-level systemd unit on the operator
+host (`~/.config/systemd/user/forge-mon1-tunnel.service`, `loginctl
+enable-linger` so it survives logout) keeps
+`ssh -N -p 2200 deploy@mon1.nodes.<zone>` up with `-L
+127.0.0.1:19090:127.0.0.1:9090 -L 127.0.0.1:13000:127.0.0.1:3000`
+(19090/13000 because 9090/3000 are taken locally). From a laptop:
+`ssh -L 9090:127.0.0.1:19090 -L 3000:127.0.0.1:13000 <operator host>`,
+then `http://localhost:9090` and `http://localhost:3000`.
