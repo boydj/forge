@@ -1,0 +1,22 @@
+# Desired Backblaze B2 state for off-site backups. Created BY HAND in the
+# Backblaze console (a bucket cannot be created by a bucket-restricted key,
+# and the operator does not want an account-wide key); scripts/b2check
+# verifies the bucket against this file using the nodes' write-only key.
+# Runbook: docs/runbooks/enable-offsite-backups.md.
+version: 1
+bucket:
+  name: as215520-forge-backups
+  type: allPrivate
+  # Object lock off; B2 keeps every version. Lifecycle: hide 30 days after
+  # upload, delete a day after hiding => ~31 days of retention, enforced by
+  # the bucket, not by any key.
+  lifecycle:
+    days_from_uploading_to_hiding: 30
+    days_from_hiding_to_deleting: 1
+  encryption: SSE-B2          # server-side, in addition to the age encryption of every archive
+keys:
+  # Both restricted to the bucket above ("Allow access to Bucket(s)").
+  - name: forge-backup-writer   # bundle: b2_backup_key_id / b2_backup_key -> every node (tmpfs rclone.conf)
+    capabilities: [listBuckets, listFiles, writeFiles]     # no readFiles: a node cannot read other nodes' archives; no deleteFiles
+  - name: forge-backup-reader   # bundle: b2_restore_key_id / b2_restore_key -> laptop only (restore drills)
+    capabilities: [listBuckets, listFiles, readFiles]

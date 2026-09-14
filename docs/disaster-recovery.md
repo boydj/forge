@@ -55,7 +55,9 @@ recipient is the `backup_encryption_key` age identity whose private half
 stays with the operator (`docs/secrets.md`); the daemon reports the age of
 the newest archive as `forge_backup_age_seconds` (`BackupStale` after 36 h).
 
-**Off-site.** With `offsite_bucket` set (`docs/runbooks/enable-offsite-backups.md`),
+**Off-site.** With `offsite_bucket` set (`docs/runbooks/enable-offsite-backups.md`;
+bucket and keys created by hand in the Backblaze console from
+`infra/backup/b2.yaml`, verified by `scripts/b2check`),
 `forge-backup` hands each new archive to `forge-offsite`, which copies it
 with `rclone` to a Backblaze B2 bucket under `<node>/`. The node holds a
 write-only application key (`/run/forge/secrets/rclone.conf`, tmpfs) that

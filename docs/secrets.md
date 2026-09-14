@@ -135,9 +135,13 @@ the reverse, plus `secrets rotate` of everything they could read.
 
 ## Backblaze B2 keys (off-site backups)
 
-`b2_admin_key_id` / `b2_admin_key`: the operator's console key, used only
-by OpenTofu on the laptop (`infra/opentofu/environments/b2`) and exported by
-`scripts/secrets env`. `b2_backup_key_id` / `b2_backup_key`: the write-only
-bucket key OpenTofu creates; `scripts/deploy` turns it into
-`/run/forge/secrets/rclone.conf` on every node. Rotation: `tofu taint
-b2_application_key.writer && tofu apply`, update the bundle, deploy.
+Two keys, both created in the Backblaze console restricted to the backup
+bucket (`infra/backup/b2.yaml`; no account-wide key exists anywhere).
+`b2_backup_key_id` / `b2_backup_key` is write-only (list, write; no read,
+no delete); `scripts/deploy` turns it into `/run/forge/secrets/rclone.conf`
+on every node. `b2_restore_key_id` / `b2_restore_key` is read-only and stays
+on the laptop; `scripts/secrets env` exports it as
+`B2_APPLICATION_KEY_ID`/`B2_APPLICATION_KEY` for `rclone` during restores.
+Rotation: create a new key in the console, update the bundle, deploy
+(writer) or nothing else (reader), then delete the old key.
+`scripts/b2check` verifies the bucket against the desired state.

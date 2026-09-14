@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# scripts/b2check [bundle]: verify the Backblaze bucket for off-site backups
+# against infra/backup/b2.yaml using the nodes' write-only key from the
+# bundle (b2_backup_key_id / b2_backup_key). Read-only API calls:
+# b2_authorize_account, b2_list_buckets. Exit 1 on any drift.
+set -euo pipefail
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+BUNDLE=${1:-$ROOT/infra/secrets/dev.enc.yaml}
+DESIRED=$ROOT/infra/backup/b2.yaml
+id=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_backup_key_id); key=$("$ROOT/scripts/secrets" get "$BUNDLE" b2_backup_key)
+[ -n "$id" ] && [ -n "$key" ] || { echo "b2check: b2_backup_key_id/b2_backup_key not in $BUNDLE" >&2; exit 2; }
+auth=$(curl -fsS -u "$id:$key" https://api.backblazeb2.com/b2api/v3/b2_authorize_account)
+python3 - "$auth" "$DESIRED" <<'PY'
+import json, sys, urllib.request, yaml
+auth = json.loads(sys.argv[1]); want = yaml.safe_load(open(sys.argv[2]))
+api = auth["apiInfo"]["storageApi"]; token = auth["authorizationToken"]
+allowed = api.get("allowed", {})
+caps = sorted(allowed.get("capabilities", []))
+bad = 0
+def check(cond, msg):
+    global bad
+    print(("ok   " if cond else "DRIFT") + " " + msg)
+    if not cond: bad += 1
+w = want["bucket"]
+check("deleteFiles" not in caps and "readFiles" not in caps, f"writer key cannot read or delete (capabilities {caps})")
+check(allowed.get("bucketName") == w["name"], f"writer key restricted to bucket {w['name']} (is {allowed.get('bucketName')})")
+req = urllib.request.Request(api["apiUrl"] + "/b2api/v3/b2_list_buckets", data=json.dumps({"accountId": auth["accountId"], "bucketName": w["name"]}).encode(), headers={"Authorization": token, "Content-Type": "application/json"})
+buckets = json.load(urllib.request.urlopen(req, timeout=30))["buckets"]
+check(len(buckets) == 1, f"bucket {w['name']} exists")
+if buckets:
+    b = buckets[0]
+    check(b.get("bucketType") == w["type"], f"bucket type {w['type']} (is {b.get('bucketType')})")
+    rules = b.get("lifecycleRules", [])
+    lc = w["lifecycle"]
+    check(any(r.get("daysFromUploadingToHiding") == lc["days_from_uploading_to_hiding"] and r.get("daysFromHidingToDeleting") == lc["days_from_hiding_to_deleting"] and not r.get("fileNamePrefix") for r in rules),
+          f"lifecycle hide after {lc['days_from_uploading_to_hiding']} d, delete {lc['days_from_hiding_to_deleting']} d later (is {rules})")
+    enc = (b.get("defaultServerSideEncryption") or {}).get("value") or {}
+    check(enc.get("mode") == w["encryption"], f"default encryption {w['encryption']} (is {enc.get('mode')})")
+sys.exit(1 if bad else 0)
+PY

@@ -5,7 +5,8 @@
 #   OFFSITE_CMD=/usr/local/bin/forge-offsite
 #   OFFSITE_BUCKET=<bucket>            OFFSITE_PREFIX=<node name>
 # Credentials live only in tmpfs: /run/forge/secrets/rclone.conf (a "b2"
-# remote with the write-only key; scripts/deploy builds it from the bundle).
+# remote with the bucket-restricted write-only key; scripts/deploy builds it
+# from the bundle; infra/backup/b2.yaml describes the bucket).
 # Exit status is the backup's: a failed copy fails forge-backup.service,
 # which NodeSystemdUnitFailed reports.
 set -eu

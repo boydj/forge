@@ -13,7 +13,7 @@ counted here.** Cloudflare DNS is the Free plan.
 | | Minimal (1 node, no BGP) | Recommended production (3 POPs anycast) | Optional add-ons |
 |---|---|---|---|
 | Compute | 1 x `vc2-1c-1gb` (1 vCPU, 1 GB, 25 GB SSD, 1 TB) **$5.00** | 2 x Vultr `vhp-1c-1gb-intel` (1 GB, 25 GB NVMe, 2 TB) **$12.00** + 1 x second-provider BGP VPS (iFog / Servperso / Virtua class, 1 GB) **~$5-10** | Larger plan `vc2-1c-2gb` $10 each |
-| Backups | none on Vultr (forge-backup + off-site below) | Backblaze B2 for `forge-backup` archives: $6/TB-month, first 10 GB free; three POPs at ~1 MB/night with 30-day retention is **$0** (`infra/opentofu/environments/b2`) | Vultr automatic backups +20% of plan ($1.00-1.20/instance); snapshots $0.05/GB-month (~$1.25 per 25 GB image) |
+| Backups | none on Vultr (forge-backup + off-site below) | Backblaze B2 for `forge-backup` archives: $6/TB-month, first 10 GB free; three POPs at ~1 MB/night with 30-day retention is **$0** (`infra/backup/b2.yaml`) | Vultr automatic backups +20% of plan ($1.00-1.20/instance); snapshots $0.05/GB-month (~$1.25 per 25 GB image) |
 | Bandwidth | included 1 TB; overage $0.01/GB | included 2 TB per Vultr node; overage $0.01/GB | |
 | DNS | Cloudflare Free **$0** | Cloudflare Free **$0** | |
 | Domain | `as215520.net` **~$1/mo** ($12/yr at Namecheap) | same | brand domain, similar |
