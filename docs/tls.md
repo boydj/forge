@@ -8,7 +8,7 @@ announced rotation. Threat model: T-12, T-30, T-35, T-36; decisions: ADR
 
 ## Service identity
 
-`internal/tlsid.LoadOrCreate` loads `gemini.cert_file`/`gemini.key_file`
+`pkg/tlsid.LoadOrCreate` loads `gemini.cert_file`/`gemini.key_file`
 or, when the key file is missing, generates:
 
 - ECDSA **P-256**, self-signed, serial random 127-bit;

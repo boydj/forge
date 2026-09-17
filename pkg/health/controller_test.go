@@ -505,3 +505,68 @@ func TestStartupWithdrawsWhenStateUnknown(t *testing.T) {
 		t.Fatalf("state %s calls %v", h.c.State(), ann.calls)
 	}
 }
+
+// TestNonCriticalFailureDoesNotWithdraw pins the criticality policy of
+// ADR 0014: a failing non-critical check degrades the node (it shows on
+// /status and the fleet page) but never takes the POP out of anycast,
+// however long it fails. A critical check still drains as before.
+func TestNonCriticalFailureDoesNotWithdraw(t *testing.T) {
+	cfg := Default()
+	var critFails, softFails atomic.Bool
+	crit := Check{Name: "gemini", Run: func(context.Context) error {
+		if critFails.Load() {
+			return errors.New("listener down")
+		}
+		return nil
+	}}
+	soft := Check{Name: "replica", NonCritical: true, Run: func(context.Context) error {
+		if softFails.Load() {
+			return errors.New("lag 500 > 100 events")
+		}
+		return nil
+	}}
+	clk := &fakeClock{t: time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)}
+	ann := &recAnn{}
+	c := New(cfg, []Check{crit, soft}, ann).SetClock(clk.Now).SetLogger(quietLogger())
+	tick := func(n int) {
+		for i := 0; i < n; i++ {
+			clk.Advance(cfg.Interval)
+			c.Tick(context.Background())
+		}
+	}
+	// Bring the node up.
+	need := int((cfg.Cooldown + cfg.Interval - 1) / cfg.Interval)
+	if k := cfg.SuccessesToRecover; k > need {
+		need = k
+	}
+	tick(need + 1)
+	if c.State() != StateAnnounced {
+		t.Fatalf("state = %s, want announced", c.State())
+	}
+	ann.take()
+
+	// The non-critical check fails for far longer than FailuresToWithdraw.
+	softFails.Store(true)
+	tick(cfg.FailuresToWithdraw * 3)
+	if c.State() != StateAnnounced {
+		t.Errorf("state = %s after sustained non-critical failure, want announced", c.State())
+	}
+	if calls := ann.take(); len(calls) != 0 {
+		t.Errorf("announcer called %v for a non-critical failure", calls)
+	}
+	// It is still visible as degraded rather than hidden.
+	ok, detail := c.Healthy()
+	if !ok {
+		t.Errorf("Healthy = false; a non-critical failure must not mark the node unhealthy")
+	}
+	if !strings.Contains(detail, "replica (non-critical)") {
+		t.Errorf("detail %q does not report the degraded check", detail)
+	}
+
+	// A critical failure on top still drains on schedule.
+	critFails.Store(true)
+	tick(cfg.FailuresToDrain)
+	if c.State() != StateDrained {
+		t.Errorf("state = %s after critical failure, want drained", c.State())
+	}
+}

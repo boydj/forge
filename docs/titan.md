@@ -4,7 +4,7 @@ Titan is the write half of the human interface: the same TLS listener and
 port as Gemini (1965), the same client certificate as identity, one upload
 per connection. Research and the choices it informed are in
 `docs/research/protocols.md` section 3; the code is
-`internal/gemini/request.go` (parsing), `internal/gemini/server.go`
+`pkg/gemini/request.go` (parsing), `pkg/gemini/server.go`
 (limits) and `internal/web/account.go`, `issues.go` (endpoints).
 
 ## Protocol as implemented

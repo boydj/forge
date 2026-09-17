@@ -12,14 +12,14 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"as215520.net/forge/internal/config"
 	"as215520.net/forge/internal/forge"
 	"as215520.net/forge/internal/hooks"
-	"as215520.net/forge/internal/metrics"
 	"as215520.net/forge/internal/repl"
 	"as215520.net/forge/internal/sshd"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/web"
+	"as215520.net/forge/pkg/config"
+	"as215520.net/forge/pkg/metrics"
 )
 
 // sshAuth adapts the forge to the SSH server's authentication and

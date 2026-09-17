@@ -85,7 +85,8 @@ PASS | openssl: TLSv1.3, close_notify from server     | openssl   |     Protocol
 PASS | openssl: session ends with 'closed'            | openssl   | closed
 PASS | certificate SAN contains hostname              | openssl   | X509v3SubjectAlternativeName:DNS:localhost
 PASS | no SNI still served (20)                       | openssl   | 20 text/gemini; charset=utf-8; lang=en
-INFO | other SNI (other.example)                      | openssl   | 20 text/gemini; charset=utf-8; lang=en (server ignores SNI)
+INFO | other SNI (other.example)                      | openssl   | 20 text/gemini; charset=utf-8; lang=en
+ (server ignores SNI)
 INFO | TLS 1.2 offered                                | openssl   |  Protocol : TLSv1.2 (minimum per docs/tls.md)
 PASS | IPv6 literal host [::1]                        | gg        | 20 text/gemini; charset=utf-8; lang=en
 PASS | IPv6 literal host [::1]                        | gemget    | Header: 20 text/gemini; charset=utf-8; lang=en
@@ -184,7 +185,7 @@ Client-side behaviour worth knowing:
    `gemini://localhost:1965/` (wrong port) and any SNI name all get `20`.
    The Gemini spec asks servers to answer `53 proxy request refused` for
    hosts they do not serve; `StatusProxyRequestRefused` exists in
-   `internal/gemini/status.go:24` but nothing uses it, and
+   `pkg/gemini/status.go:24` but nothing uses it, and
    `docs/protocol-architecture.md` records no decision. Low risk (no
    proxying happens), but it means a misdirected request is silently served
    under the wrong absolute URLs in feeds. Proposed fix: in the web handler
@@ -198,12 +199,12 @@ Client-side behaviour worth knowing:
    `forge: hook socket: listen unix .../hook.sock: bind: invalid argument`
    (`cmd/forge/ssh.go:64`, `internal/hooks/hooks.go:176`): `sun_path` is
    108 bytes. `admin init` accepts the path without complaint. Fix: in
-   `internal/config.(*Config).Validate` (or `hooks.Listen`) reject
+   `pkg/config.(*Config).Validate` (or `hooks.Listen`) reject
    `len(HookSocket()) >= 104` with a message naming the limit, and/or add a
    `[ssh] hook_socket` override so the socket can live in `/run`.
 
 5. **RST after early Titan rejection** (`INFO`, see above).
-   `internal/gemini/server.go:281` does `CloseWrite()` and then the deferred
+   `pkg/gemini/server.go:281` does `CloseWrite()` and then the deferred
    `Close()` while unread body bytes may still be in flight, which turns the
    FIN into an RST on Linux. Clients that write before they read (gmid
    `titan`, and probably other simple uploaders) can lose the status line.
@@ -214,7 +215,7 @@ Client-side behaviour worth knowing:
 
 6. **Raw space in the request line is accepted** (`INFO`).
    `gemini://host/a b` yields `51` rather than `59`;
-   `internal/gemini/request.go:84-89` rejects controls and `\r\n` but lets
+   `pkg/gemini/request.go:84-89` rejects controls and `\r\n` but lets
    `url.Parse` accept the space. Strict servers and the spec's "URL" wording
    imply `59`. One-line fix: add `' '` to the control check at
    `request.go:88`.

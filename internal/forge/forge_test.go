@@ -16,9 +16,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"as215520.net/forge/internal/config"
 	"as215520.net/forge/internal/store"
 	gitvcs "as215520.net/forge/internal/vcs/git"
+	"as215520.net/forge/pkg/config"
 )
 
 func newForge(t *testing.T) *Forge {

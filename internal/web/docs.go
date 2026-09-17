@@ -9,9 +9,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"as215520.net/forge/internal/config"
-	"as215520.net/forge/internal/gemini"
 	"as215520.net/forge/internal/vcs"
+	"as215520.net/forge/pkg/config"
+	"as215520.net/forge/pkg/gemini"
 )
 
 // docs serves the documentation site: the directory named by [docs] of a

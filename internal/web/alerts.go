@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"as215520.net/forge/internal/gemini"
+	"as215520.net/forge/pkg/gemini"
 )
 
 // Alerts feed. Prometheus on the monitoring host evaluates the alert rules;

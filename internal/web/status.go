@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"as215520.net/forge/internal/gemini"
 	"as215520.net/forge/internal/vcs"
 	"as215520.net/forge/internal/version"
+	"as215520.net/forge/pkg/gemini"
 )
 
 // The status page (/status/) is the fleet as this node sees it: every point

@@ -56,7 +56,7 @@ events (append-only)  -->  notifier worker  -->  Notifier interface  -->  gemfee
   blocks a write, and records delivery failures as `admin` events for the
   operator.
 - **Misfin server side** (required for sender verification): a small
-  listener on 1958 sharing `internal/gemini`'s TLS setup and the service
+  listener on 1958 sharing `pkg/gemini`'s TLS setup and the service
   certificate, answering only the verification handshake and, optionally,
   accepting replies into the issue thread (a reply becomes a comment,
   subject to the same limits as a Titan upload). Which fork (B or C) to

@@ -9,9 +9,9 @@ import (
 	"strings"
 
 	"as215520.net/forge/internal/forge"
-	"as215520.net/forge/internal/gemini"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/vcs"
+	"as215520.net/forge/pkg/gemini"
 )
 
 // Change routes (ADR 0012):

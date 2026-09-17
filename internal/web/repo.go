@@ -12,9 +12,9 @@ import (
 	"unicode/utf8"
 
 	"as215520.net/forge/internal/forge"
-	"as215520.net/forge/internal/gemini"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/vcs"
+	"as215520.net/forge/pkg/gemini"
 )
 
 // repoCtx is a resolved repository for a request.

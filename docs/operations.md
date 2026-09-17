@@ -9,7 +9,7 @@ and restores in `docs/disaster-recovery.md`, the multi-POP network in
 
 One TOML file (`/etc/forge/forge.toml`; `forge serve --config`,
 `FORGE_CONFIG`). Unknown keys are rejected at load. Defaults are those of
-`config.Default` (`internal/config/config.go`); `forge admin init` writes a
+`config.Default` (`pkg/config/config.go`); `forge admin init` writes a
 complete file. Sizes are bytes; durations are Go strings (`30s`, `5m0s`).
 
 | Key | Default | Meaning |

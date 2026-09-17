@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"as215520.net/forge/internal/metrics"
 	"as215520.net/forge/internal/store"
 	gitvcs "as215520.net/forge/internal/vcs/git"
+	"as215520.net/forge/pkg/metrics"
 )
 
 func git(t *testing.T, dir string, args ...string) string {

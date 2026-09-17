@@ -212,7 +212,10 @@ func (c *Controller) shutdown() error {
 // calls every Interval; tests call it directly.
 func (c *Controller) Tick(ctx context.Context) {
 	results := c.chk.Run(ctx)
-	ok := AllOK(results)
+	// Only critical checks decide whether this POP keeps attracting anycast
+	// traffic; a failing non-critical check degrades the node without
+	// withdrawing it (ADR 0014).
+	ok := CriticalOK(results)
 	now := c.now()
 
 	c.opMu.Lock()

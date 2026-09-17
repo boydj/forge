@@ -13,12 +13,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"as215520.net/forge/internal/config"
 	"as215520.net/forge/internal/forge"
 	"as215520.net/forge/internal/mirror"
 	"as215520.net/forge/internal/repl"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/version"
+	"as215520.net/forge/pkg/config"
 )
 
 func adminUsage() {

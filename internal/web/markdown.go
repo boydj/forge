@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"as215520.net/forge/internal/gemini"
+	"as215520.net/forge/pkg/gemini"
 )
 
 var (

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"as215520.net/forge/internal/health"
+	"as215520.net/forge/pkg/health"
 )
 
 // Fleet view: every node polls every peer's /v1/status so that any node can

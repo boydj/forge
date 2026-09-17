@@ -463,14 +463,14 @@ require (
     golang.org/x/crypto v0.57.0                   // ssh server (2026-09-08; includes the CVE-2026-56855/78662 fixes)
     modernc.org/sqlite v1.58.0                    // cgo-free SQLite 3.53.4 (v1.59.0 of 2026-09-05 is a minor bump; either is fine)
     github.com/prometheus/client_golang v1.24.1   // metrics (2026-07-24)
-    github.com/BurntSushi/toml v1.6.0             // config file (already chosen by internal/config)
+    github.com/BurntSushi/toml v1.6.0             // config file (already chosen by pkg/config)
 )
 
 // add when the store lands
 //   github.com/pressly/goose/v3 v3.28.0         // embedded SQL migrations; or a 50-line schema_version table
 
 // deliberately NOT used
-//   git.sr.ht/~adnano/go-gemini                 // internal/gemini already implements Gemini+Titan on crypto/tls
+//   git.sr.ht/~adnano/go-gemini                 // pkg/gemini already implements Gemini+Titan on crypto/tls
 //   charm.land/ssh, gliderlabs/ssh              // exec-only server on x/crypto/ssh needs no framework
 //   go-git, git2go, gogs/git-module             // ADR 0004: git CLI via internal/vcs/git
 //   cobra / urfave/cli                          // stdlib flag + subcommand switch until the admin CLI grows
@@ -498,8 +498,8 @@ tools: cargo-audit 0.22.2, cargo-deny 0.20.2, cargo-vet; target x86_64/aarch64-u
 
 ## 15. Proposed Go project layout
 
-Aligned with what already exists in the tree (`internal/gemini`,
-`internal/vcs`, `internal/config`, `internal/version`); new packages marked *(new)*.
+Aligned with what already exists in the tree (`pkg/gemini`,
+`internal/vcs`, `pkg/config`, `internal/version`); new packages marked *(new)*.
 
 ```
 forge/                          module as215520.net/forge

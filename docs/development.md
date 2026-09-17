@@ -154,36 +154,36 @@ ssh -p 2222 git@localhost
 | Path | Contents |
 | --- | --- |
 | `cmd/forge` | `main.go` (subcommands), `serve.go` (wiring, listeners, hourly maintenance loop, hook script installation), `ssh.go` (SSH auth/authz adapters, hook socket), `admin.go` (CLI), `hook.go` (`forge hook`) |
-| `internal/config` | TOML schema, defaults, validation, derived paths and URL builders |
-| `internal/gemini` | protocol server: request-line parsing (Gemini and Titan), response writer with META sanitising, gemtext `Page` builder, TLS config, connection limits |
+| `pkg/config` | TOML schema, defaults, validation, derived paths and URL builders |
+| `pkg/gemini` | protocol server: request-line parsing (Gemini and Titan), response writer with META sanitising, gemtext `Page` builder, TLS config, connection limits |
 | `internal/web` | routing and pages (`handler.go`, `front.go`, `repo.go`, `issues.go`, `account.go`, `feeds.go`, `markdown.go`, `stubs.go` for M3 placeholders); the only package that knows URL layout |
 | `internal/forge` | domain services: identity, registration, enrolment codes, SSH keys, repositories, permissions, quotas, issues/comments, push hooks, events |
 | `internal/store` | SQLite access and migrations; **all SQL lives here** |
 | `internal/vcs` | the VCS interface; `internal/vcs/git` implements it with the git CLI (`runner.go` hardened environment, `repo.go` plumbing) |
 | `internal/sshd` | restricted SSH server (`docs/git-ssh.md`) |
 | `internal/hooks` | JSON-over-Unix-socket protocol between `forge hook` and the daemon |
-| `internal/tlsid` | service certificate generation/loading |
-| `internal/metrics` | Prometheus registry |
+| `pkg/tlsid` | service certificate generation/loading |
+| `pkg/metrics` | Prometheus registry |
 | `internal/version` | `Version` set by `-ldflags` |
 | `migrations/` | `NNNN_name.sql`, embedded and applied in order at startup |
 | `tests/` | `acceptance_test.go` (build tag `integration`), `network/` and `infra/` Python tests |
 | `infra/`, `scripts/` | deployment, network generation, secrets, backup |
 
 `docs/architecture.md` lists some packages (`internal/titan`,
-`internal/feed`, `internal/repl`, `internal/health`) that are planned but do
-not exist yet: Titan parsing lives in `internal/gemini`, feeds in
+`internal/feed`, `internal/repl`, `pkg/health`) that are planned but do
+not exist yet: Titan parsing lives in `pkg/gemini`, feeds in
 `internal/web/feeds.go`, and replication/health arrive with M5.
 
 ## Testing tiers
 
-1. **Unit and protocol tests** (`make test`). `internal/gemini` parses
+1. **Unit and protocol tests** (`make test`). `pkg/gemini` parses
    request lines and drives a real TLS listener; `internal/web/web_test.go`
    starts the handler on a loopback port and performs Gemini and Titan
    requests with generated client certificates (registration, enrolment,
    key upload, issues, `;edit`, size and MIME rejections); `internal/sshd`
    runs the system `git` and `ssh` against the server (skipped when
    absent); `internal/vcs/git`, `internal/store`, `internal/forge`,
-   `internal/config`, `internal/tlsid` test their own packages.
+   `pkg/config`, `pkg/tlsid` test their own packages.
 2. **Integration acceptance** (`make integration`). `tests/acceptance_test.go`
    is the canonical "does it work" check: it builds nothing itself (skips if
    `bin/forge` is missing), initialises a node on random loopback ports,

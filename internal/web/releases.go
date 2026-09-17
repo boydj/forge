@@ -5,8 +5,8 @@ import (
 	"io"
 	"strings"
 
-	"as215520.net/forge/internal/gemini"
 	"as215520.net/forge/internal/store"
+	"as215520.net/forge/pkg/gemini"
 )
 
 // Release routes:

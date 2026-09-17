@@ -127,7 +127,7 @@ Reported, not fixed; the tests skip the affected check with the same text.
   URLs on the pages show the wrong port. Use `net.SplitHostPort`. Serving
   on `[::1]` works (scenario 11).
 - Observation, not a bug: on read timeout the Gemini server answers
-  `59 malformed request` before closing (`internal/gemini/server.go:224-232`).
+  `59 malformed request` before closing (`pkg/gemini/server.go:224-232`).
   Harmless, but a `59` is logged for every slowloris probe.
 
 ## Not testable locally

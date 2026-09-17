@@ -1,6 +1,6 @@
 # Health worker and announcement control
 
-`internal/health` is the watchdog that decides whether this POP should
+`pkg/health` is the watchdog that decides whether this POP should
 attract anycast traffic. Every 10 s it runs the local self-checks in
 parallel; the verdict of each cycle feeds a small state machine with
 hysteresis that drives `scripts/bgp-announce` (and through it BIRD). The
@@ -17,12 +17,29 @@ stay out longer each time.
 | `ssh`     | TCP connect to the local SSH listener, read the `SSH-2.0-forge` banner                           | `SSHAddr`                        |
 | `disk`    | `statfs` on the data directory, free bytes must be at least `DiskMin`                            | `DataDir`, `DiskMin`             |
 | `db`      | Ping the SQLite handle (`store.DB().PingContext`)                                                | a `Pinger` passed by the caller  |
-| `replica` | Replication lag (events behind the leader) must not exceed `ReplicaLagMax`                       | `ReplicaLagMax`, a lag function  |
+| `replica` | Replication lag (events behind the leader) must not exceed `ReplicaLagMax`. **Non-critical** | `ReplicaLagMax`, a lag function  |
 
 A check whose configuration is empty is skipped. Each check runs under its
 own timeout (`CheckTimeout`, 5 s); a check that ignores its context is
 abandoned when the timeout fires, and a panicking check counts as a
-failure. **A cycle is healthy iff every check passes.**
+failure. **A cycle is healthy iff every _critical_ check passes.**
+
+### Criticality (ADR 0014)
+
+Anycast is per-POP, not per-service: BGP announces the prefixes from a node,
+so one verdict decides whether that node attracts traffic for everything it
+runs. A check therefore declares whether its failure justifies taking the
+whole POP out of rotation:
+
+| | Checks | On failure |
+| --- | --- | --- |
+| Critical (`Check.NonCritical == false`) | `gemini`, `ssh`, `db`, `disk` | drives the state machine: drain, then withdraw |
+| Non-critical (`NonCritical: true`) | `replica` | node stays announced; the failure is reported on `/status`, on the fleet page and in metrics, annotated `name (non-critical)` |
+
+The zero value is **critical** on purpose: a check nobody classified takes
+the POP out rather than failing silently. Replication lag is non-critical
+because a lagging replica still serves reads correctly, and withdrawing on
+lag is how one slow leader cascades into a fleet-wide outage.
 
 The Gemini check speaks to the same listener users reach, so it exercises
 TLS, the request parser, the handler and (through `/status`) the existing

@@ -18,6 +18,12 @@ import (
 type Check struct {
 	Name string
 	Run  func(ctx context.Context) error
+	// NonCritical marks a check whose failure must not take the node out of
+	// anycast: it is reported on /status, in the fleet page and in metrics,
+	// but the announcement state machine ignores it. The zero value is
+	// critical on purpose — a check nobody classified withdraws the POP
+	// rather than failing silently (ADR 0014).
+	NonCritical bool
 }
 
 // Result is the outcome of one check in one cycle.
@@ -25,6 +31,8 @@ type Result struct {
 	Name     string
 	Err      error
 	Duration time.Duration
+	// NonCritical is copied from the Check that produced this result.
+	NonCritical bool
 }
 
 // OK reports whether the check passed.
@@ -65,7 +73,7 @@ func (c *Checker) Run(ctx context.Context) []Result {
 			defer cancel()
 			start := time.Now()
 			err := runCheck(cctx, chk)
-			results[i] = Result{Name: chk.Name, Err: err, Duration: time.Since(start)}
+			results[i] = Result{Name: chk.Name, Err: err, Duration: time.Since(start), NonCritical: chk.NonCritical}
 		}(i, chk)
 	}
 	wg.Wait()
@@ -102,12 +110,28 @@ func AllOK(rs []Result) bool {
 	return true
 }
 
+// CriticalOK reports whether every critical check passed. It is what the
+// announcement state machine acts on: a failing non-critical check leaves
+// the node announced and merely degraded (ADR 0014).
+func CriticalOK(rs []Result) bool {
+	for _, r := range rs {
+		if r.Err != nil && !r.NonCritical {
+			return false
+		}
+	}
+	return true
+}
+
 // Failing summarises failing results as "name: err, name: err", or "ok".
 func Failing(rs []Result) string {
 	var parts []string
 	for _, r := range rs {
 		if r.Err != nil {
-			parts = append(parts, r.Name+": "+r.Err.Error())
+			name := r.Name
+			if r.NonCritical {
+				name += " (non-critical)"
+			}
+			parts = append(parts, name+": "+r.Err.Error())
 		}
 	}
 	if len(parts) == 0 {
@@ -240,7 +264,7 @@ func DBCheck(p Pinger) Check {
 
 // ReplicaLagCheck fails when lag() exceeds max events.
 func ReplicaLagCheck(lag func() (int64, error), max int64) Check {
-	return Check{Name: "replica", Run: func(context.Context) error {
+	return Check{Name: "replica", NonCritical: true, Run: func(context.Context) error {
 		n, err := lag()
 		if err != nil {
 			return err

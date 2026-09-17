@@ -35,9 +35,9 @@ leader node; others are replicas.
 
 | Package | Role |
 | --- | --- |
-| `internal/config` | TOML configuration and defaults |
-| `internal/gemini` | Gemini and Titan protocol: request parsing (incl. Titan parameters and `;edit`), responses, gemtext writer, TLS setup |
-| `internal/tlsid` | long-lived self-signed service certificate |
+| `pkg/config` | TOML configuration and defaults |
+| `pkg/gemini` | Gemini and Titan protocol: request parsing (incl. Titan parameters and `;edit`), responses, gemtext writer, TLS setup |
+| `pkg/tlsid` | long-lived self-signed service certificate |
 | `internal/sshd` | restricted SSH server |
 | `internal/hooks` | git hook protocol (pre/post-receive over a Unix socket, proc-receive pkt-line) |
 | `internal/vcs` | VCS interface; `internal/vcs/git` implements it with the git CLI |
@@ -45,8 +45,8 @@ leader node; others are replicas.
 | `internal/forge` | domain services: accounts, repositories, issues, changes, releases, ACL, quotas, hooks, backup |
 | `internal/web` | Gemini/Titan handlers, gemtext rendering, gemfeeds and Atom, write forwarding |
 | `internal/repl` | replication (events, metadata, git over the control network) and leadership |
-| `internal/health` | health checks and hysteresis-controlled announcement |
-| `internal/metrics` | Prometheus registry |
+| `pkg/health` | health checks and hysteresis-controlled announcement |
+| `pkg/metrics` | Prometheus registry |
 
 Details: `docs/protocol-architecture.md`, `docs/vcs-interface.md`,
 `docs/replication.md`, `docs/network-architecture.md`, `docs/threat-model.md`.

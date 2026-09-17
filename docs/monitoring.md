@@ -35,7 +35,7 @@ the monitoring host's public interface on purpose.
 
 | Job | Target per POP | Port | Exporter | Notes |
 | --- | --- | --- | --- | --- |
-| `forge` | `[<wg_address>]:9100` | 9100 | the daemon (`internal/metrics`) | `forge.toml` `[metrics] listen`, rendered by `modules/forge-node` |
+| `forge` | `[<wg_address>]:9100` | 9100 | the daemon (`pkg/metrics`) | `forge.toml` `[metrics] listen`, rendered by `modules/forge-node` |
 | `node` | `[<wg_address>]:9101` | 9101 | `prometheus-node-exporter` (Debian) | collectors: cpu, meminfo, filesystem, netdev, loadavg, diskstats, systemd (`infra/cloud-init/node.yaml.tftpl`) |
 | `bird` | `[<wg_address>]:9324` | 9324 | `prometheus-bird-exporter` (Debian trixie 1.4.2+ds-2, upstream `github.com/czerwonk/bird_exporter`) | unit below; 9324 is in `PRIVATE_TCP` (modules/forge-node) |
 | `blackbox_*` | public addresses | 1965, 22 | `prometheus-blackbox-exporter` (Debian trixie 0.26.0-1) on the monitoring host, `127.0.0.1:9115` | see Reachability |
@@ -56,7 +56,7 @@ faster than the thing it watches.
 
 ### The forge metrics
 
-From `internal/metrics/metrics.go` (also listed in `docs/operations.md`):
+From `pkg/metrics/metrics.go` (also listed in `docs/operations.md`):
 
 | Metric | Labels | Used by |
 | --- | --- | --- |

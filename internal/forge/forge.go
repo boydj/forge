@@ -14,10 +14,10 @@ import (
 	"strings"
 	"syscall"
 
-	"as215520.net/forge/internal/config"
 	"as215520.net/forge/internal/store"
 	"as215520.net/forge/internal/vcs"
 	gitvcs "as215520.net/forge/internal/vcs/git"
+	"as215520.net/forge/pkg/config"
 )
 
 // Forge is the application service layer.
