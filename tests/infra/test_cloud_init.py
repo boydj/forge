@@ -111,6 +111,7 @@ def render_nftables():
             "admin_ssh_port": 2200,
             "wg_port": 51820,
             "wg_iface": "wg0",
+            "public_tcp_ports": "22, 1965",
             "private_tcp_ports": "9100, 9101, 9324, 9200",
         },
         {},
@@ -340,6 +341,27 @@ class NftablesTemplate(unittest.TestCase):
         self.assertNotIn("${", out)
         for needle in ("policy drop", "ADMIN_SSH  = 2200", "{ 22, 1965 }", "udp dport $WG_PORT", "iifname $WG_IF tcp dport $PRIVATE_TCP"):
             self.assertIn(needle, out)
+
+    def test_public_ports_come_from_the_variable(self):
+        """The public service ports are a rendered define, not hardcoded: a POP
+        opens the ports of the services it runs (address-plan.yaml services:)."""
+        raw = read(NFTABLES)
+        self.assertIn("${public_tcp_ports}", raw)
+        self.assertNotIn("tcp dport { 22, 1965 }", raw)
+        out = render_nftables()
+        self.assertIn("define PUBLIC_TCP  = { 22, 1965 }", out)
+        # Both families gate on the define, on every interface except wg0.
+        self.assertEqual(out.count("iifname != $WG_IF tcp dport $PUBLIC_TCP"), 2)
+
+    def test_a_service_only_pop_renders_only_its_ports(self):
+        """A POP running a hypothetical gopher-only service opens 70, not 1965."""
+        out = render(read(NFTABLES), {
+            "anycast_v4": "192.0.2.1", "anycast_v6": "2001:db8::1",
+            "admin_ssh_port": 2200, "wg_port": 51820, "wg_iface": "wg0",
+            "public_tcp_ports": "70", "private_tcp_ports": "9101",
+        }, {})
+        self.assertIn("define PUBLIC_TCP  = { 70 }", out)
+        self.assertNotIn("1965", out)
 
 
 if __name__ == "__main__":

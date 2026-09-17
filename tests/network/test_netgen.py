@@ -146,6 +146,68 @@ class NetgenTest(unittest.TestCase):
             plan["pops"][0]["ipv6_unicast_block"] = "2a0f:85c1:368:1ab::/64"
         self._check_broken(mutate, "!= derived")
 
+    # -- service catalogue --------------------------------------------------
+
+    def test_catalogue_shape(self) -> None:
+        cat = self.plan["services"]
+        self.assertIn("forge", cat)
+        forge = cat["forge"]
+        self.assertTrue(forge["critical"])
+        self.assertTrue(forge["anycast"])
+        self.assertEqual(sorted(forge["public_tcp"]), [22, 1965])
+        # No port may be both public and private.
+        self.assertFalse(set(forge["public_tcp"]) & set(forge["private_tcp"]))
+        # POPs reference services by name; a service name is never a role.
+        for name, pop in self.pops.items():
+            for svc in pop.get("services", []):
+                self.assertIn(svc, cat, f"{name}: unknown service {svc}")
+                self.assertNotIn(svc, pop["roles"], f"{name}: {svc} is in roles as well as services")
+
+    def test_check_rejects_unknown_service(self) -> None:
+        def mutate(plan):
+            plan["pops"][0]["services"] = ["nope"]
+        self._check_broken(mutate, "unknown service")
+
+    def test_check_rejects_service_listed_as_a_role(self) -> None:
+        def mutate(plan):
+            plan["pops"][0]["roles"] = ["forge", "bgp", "replica"]
+        self._check_broken(mutate, "is a service, not a role")
+
+    def test_check_rejects_two_services_claiming_one_port(self) -> None:
+        def mutate(plan):
+            plan["services"]["gopher"] = {"description": "g", "critical": False, "anycast": False,
+                                          "public_tcp": [22], "private_tcp": []}
+            plan["pops"][0]["services"].append("gopher")
+        self._check_broken(mutate, "both claim public_tcp port 22")
+
+    def test_check_rejects_port_public_and_private(self) -> None:
+        def mutate(plan):
+            plan["services"]["forge"]["private_tcp"] = [22, 9100]
+        self._check_broken(mutate, "is both public_tcp and private_tcp")
+
+    def test_check_rejects_service_on_a_monitor(self) -> None:
+        def mutate(plan):
+            for pop in plan["pops"]:
+                if "monitor" in pop["roles"]:
+                    pop["services"] = ["forge"]
+        self._check_broken(mutate, "a monitor runs no services")
+
+    def test_check_rejects_anycast_service_without_an_address(self) -> None:
+        def mutate(plan):
+            plan["services"]["ntp"] = {"description": "n", "critical": False, "anycast": True,
+                                       "public_tcp": [123], "private_tcp": []}
+        self._check_broken(mutate, "no ipv6.services/ipv4.services entry is named ntp")
+
+    def test_check_rejects_address_port_outside_the_catalogue(self) -> None:
+        def mutate(plan):
+            plan["ipv6"]["services"][0]["ports"] = [1965, 22, 70]
+        self._check_broken(mutate, "are not in services.forge.public_tcp")
+
+    def test_check_rejects_reservation_with_ports(self) -> None:
+        def mutate(plan):
+            plan["ipv6"]["services"][1]["ports"] = [70]
+        self._check_broken(mutate, "must have ports: []")
+
     def test_overrides_unknown_pop_rejected(self) -> None:
         path = os.path.join(self.tmp, "bad-overrides.yaml")
         with open(path, "w", encoding="utf-8") as fh:
@@ -345,6 +407,60 @@ class NetgenTest(unittest.TestCase):
         self.assertEqual(sorted(x.strip() for x in m.group(1).split(",")),
                          ["2a0f:85c1:368:101::1", "2a0f:85c1:368:102::1", "2a0f:85c1:368:103::1"])
         self.assertIn("203.0.113.250", nft)  # but its endpoint is in the mesh endpoint set
+
+    def _nft_ports(self, nft: str, define: str) -> list[int] | None:
+        """Ports of a `define <name> = { .. }`, or None when it is commented out."""
+        m = re.search(rf"^define {re.escape(define)} = \{{ ([^}}]+) \}}", nft, re.M)
+        return sorted(int(x) for x in m.group(1).split(",")) if m else None
+
+    def test_nftables_per_pop_ports(self) -> None:
+        """A POP opens the ports of the services it runs, nothing more."""
+        nft = self.files["infra/network/generated/nftables-vars.nft"]
+        cat = self.plan["services"]
+        npt = self.plan["node_private_tcp"]
+        for name, pop in self.pops.items():
+            if name == "lab":
+                continue  # lab never appears in the production firewall sets
+            services = pop.get("services", [])
+            want_public = sorted({p for s in services for p in cat[s]["public_tcp"]})
+            want_private = set(npt.get("all", []))
+            if "bgp" in pop["roles"] and "monitor" not in pop["roles"]:
+                want_private |= set(npt.get("bgp", []))
+            for s in services:
+                want_private |= set(cat[s]["private_tcp"])
+            self.assertEqual(self._nft_ports(nft, f"pop_{name}_public_tcp"),
+                             want_public or None, f"{name} public ports")
+            self.assertEqual(self._nft_ports(nft, f"pop_{name}_private_tcp"),
+                             sorted(want_private), f"{name} private ports")
+        # The forge POPs are unchanged from the hand-written rule they replace.
+        self.assertEqual(self._nft_ports(nft, "pop_ewr1_public_tcp"), [22, 1965])
+        # A monitor runs no services, so it opens no public port at all.
+        self.assertIsNone(self._nft_ports(nft, "pop_mon1_public_tcp"))
+        self.assertIn("# define pop_mon1_public_tcp: empty (runs no services)", nft)
+
+    def test_tofu_public_ports_match_the_catalogue(self) -> None:
+        """modules/forge-node's default and the dev wiring agree with the plan."""
+        with open(os.path.join(REPO, "infra", "opentofu", "modules", "forge-node", "variables.tf"),
+                  encoding="utf-8") as fh:
+            variables = fh.read()
+        m = re.search(r'variable "public_tcp_ports".*?default\s*=\s*"([^"]*)"', variables, re.S)
+        self.assertIsNotNone(m, "forge-node must declare public_tcp_ports with a default")
+        default = sorted(int(x) for x in m.group(1).split(","))
+        self.assertEqual(default, sorted(self.plan["services"]["forge"]["public_tcp"]),
+                         "the module default drifted from services.forge.public_tcp")
+        # The dev environment derives the real value from the plan, so a new
+        # service cannot open a port in the plan but not in the firewall.
+        with open(os.path.join(REPO, "infra", "opentofu", "environments", "dev", "node.tf"),
+                  encoding="utf-8") as fh:
+            node_tf = fh.read()
+        self.assertIn("address-plan.yaml", node_tf)
+        self.assertIn("public_tcp_ports", node_tf)
+
+    def test_nftables_template_has_no_hardcoded_ports(self) -> None:
+        with open(os.path.join(REPO, "infra", "firewall", "nftables.conf.tftpl"), encoding="utf-8") as fh:
+            tpl = fh.read()
+        self.assertIn("${public_tcp_ports}", tpl)
+        self.assertNotIn("tcp dport { 22, 1965 }", tpl)
 
     # -- monitor role ---------------------------------------------------------
 

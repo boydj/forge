@@ -12,6 +12,20 @@ locals {
       for other, o in var.pops : other => "[${split("/", o.wg_address)[0]}]:${var.control_port}" if other != name
     }
   }
+
+  # The address plan is the service catalogue: a POP's public firewall ports
+  # are the union of the public_tcp of the services it runs. Read here rather
+  # than restated in tfvars so the firewall cannot drift from the plan;
+  # scripts/netgen emits the same set as pop_<name>_public_tcp.
+  plan      = yamldecode(file("${path.module}/../../../network/address-plan.yaml"))
+  plan_pops = { for p in local.plan.pops : p.name => p }
+  pop_public_tcp = {
+    for name, p in var.pops : name => join(", ", [
+      for port in distinct(flatten([
+        for svc in try(local.plan_pops[name].services, []) : local.plan.services[svc].public_tcp
+      ])) : tostring(port)
+    ])
+  }
 }
 
 module "node" {
@@ -37,6 +51,7 @@ module "node" {
   prometheus_url   = local.prometheus_url
   offsite_bucket   = var.offsite_bucket
   mirrors          = var.mirrors
+  public_tcp_ports = lookup(local.pop_public_tcp, each.key, "22, 1965")
 
   operator_ssh_public_keys = coalesce(
     var.operator_ssh_public_keys,

@@ -106,6 +106,9 @@ class Pop:
         self.region: str = raw.get("region", "")
         self.index: int = int(raw["index"])
         self.roles: list[str] = list(raw.get("roles") or [])
+        self.services: list[str] = list(raw.get("services") or [])
+        self.catalogue: dict = plan.get("services") or {}
+        self.node_private: dict = plan.get("node_private_tcp") or {}
         self.dns: bool = bool(raw.get("dns", True))
         self.provider_ipv4: str | None = raw.get("provider_ipv4")
         self.provider_ipv6: str | None = raw.get("provider_ipv6")
@@ -138,6 +141,29 @@ class Pop:
     @property
     def mesh_group(self) -> str:
         return "lab" if self.is_lab else "production"
+
+    @property
+    def public_tcp(self) -> list[int]:
+        """Ports this POP admits from the internet: the union over its services."""
+        ports: set[int] = set()
+        for name in self.services:
+            ports.update(self.catalogue.get(name, {}).get("public_tcp") or [])
+        return sorted(ports)
+
+    @property
+    def private_tcp(self) -> list[int]:
+        """Ports this POP admits on wg0: its services' plus the platform's own."""
+        ports: set[int] = set(self.node_private.get("all") or [])
+        if self.bgp:
+            ports.update(self.node_private.get("bgp") or [])
+        for name in self.services:
+            ports.update(self.catalogue.get(name, {}).get("private_tcp") or [])
+        return sorted(ports)
+
+    @property
+    def critical_services(self) -> list[str]:
+        """Services whose failure withdraws this POP from anycast (ADR 0014)."""
+        return sorted(n for n in self.services if (self.catalogue.get(n) or {}).get("critical"))
 
     def wg_endpoint_host(self, preference: list[str]) -> str | None:
         for pref in preference:
@@ -279,6 +305,50 @@ def validate(plan: dict) -> Checker:
             c.check(rng[1] < other[0] or rng[0] > other[1], f"ipv4.reserved: {r['range']} overlaps another reserved range")
         ranges.append(rng)
 
+    # ---- service catalogue ------------------------------------------------
+    catalogue = plan.get("services")
+    c.check(isinstance(catalogue, dict) and bool(catalogue), "services: must be a non-empty mapping of service name -> definition")
+    catalogue = catalogue if isinstance(catalogue, dict) else {}
+    for sname, svc in catalogue.items():
+        if not c.check(isinstance(svc, dict), f"services.{sname}: must be a mapping"):
+            continue
+        c.check(isinstance(svc.get("description"), str) and svc["description"].strip(),
+                f"services.{sname}: description must be a non-empty string")
+        for field in ("critical", "anycast"):
+            c.check(isinstance(svc.get(field), bool), f"services.{sname}: {field} must be true or false")
+        seen_ports: dict[int, str] = {}
+        for field in ("public_tcp", "private_tcp"):
+            ports = svc.get(field)
+            if not c.check(isinstance(ports, list), f"services.{sname}: {field} must be a list"):
+                continue
+            for port in ports:
+                if not c.check(isinstance(port, int) and 1 <= port <= 65535,
+                               f"services.{sname}.{field}: {port!r} must be an integer 1..65535"):
+                    continue
+                c.check(port not in seen_ports,
+                        f"services.{sname}: port {port} is both {seen_ports.get(port)} and {field}")
+                seen_ports[port] = field
+        # An anycast service must actually have an address to answer on.
+        if svc.get("anycast"):
+            has_addr = any(s.get("name") == sname for fam in ("ipv6", "ipv4") for s in plan[fam].get("services", []))
+            c.check(has_addr, f"services.{sname}: anycast is true but no ipv6.services/ipv4.services entry is named {sname}")
+    # Address assignments cross-check: an entry naming a catalogue service may
+    # only bind that service's public ports; anything else is a reservation.
+    for fam in ("ipv6", "ipv4"):
+        for s in plan[fam].get("services", []):
+            sname, ports = s.get("name"), (s.get("ports") or [])
+            if sname in catalogue:
+                allowed = set(catalogue[sname].get("public_tcp") or [])
+                extra = sorted(set(ports) - allowed)
+                c.check(not extra, f"{fam}.services.{sname}: port(s) {extra} are not in services.{sname}.public_tcp")
+            else:
+                c.check(not ports, f"{fam}.services.{sname}: not in the service catalogue, so it is a reservation and must have ports: []")
+    npt = plan.get("node_private_tcp") or {}
+    c.check(isinstance(npt, dict), "node_private_tcp must be a mapping of role -> port list")
+    for role, ports in (npt.items() if isinstance(npt, dict) else []):
+        c.check(isinstance(ports, list) and all(isinstance(p, int) and 1 <= p <= 65535 for p in ports),
+                f"node_private_tcp.{role}: must be a list of integers 1..65535")
+
     # ---- WireGuard -------------------------------------------------------
     wg = plan["wireguard"]
     ula = parse_net(wg.get("ula_prefix"))
@@ -316,9 +386,34 @@ def validate(plan: dict) -> Checker:
         roles = raw.get("roles")
         c.check(isinstance(roles, list) and bool(roles), f"pops.{name}: roles must be a non-empty list")
         is_monitor = isinstance(roles, list) and "monitor" in roles
+        # Services come from the catalogue by name; a service name in `roles`
+        # is the pre-catalogue shape and is rejected so the two cannot drift.
+        svc_names = raw.get("services", [])
+        if c.check(isinstance(svc_names, list), f"pops.{name}: services must be a list of catalogue names"):
+            for sname in svc_names:
+                c.check(sname in catalogue, f"pops.{name}: unknown service {sname!r} (not in the services catalogue)")
+            dupes = sorted({s for s in svc_names if svc_names.count(s) > 1})
+            c.check(not dupes, f"pops.{name}: duplicate service(s) {dupes}")
+            # Two services on one POP must not want the same port.
+            for field in ("public_tcp", "private_tcp"):
+                owner: dict[int, str] = {}
+                for sname in svc_names:
+                    for port in (catalogue.get(sname, {}).get(field) or []):
+                        c.check(port not in owner,
+                                f"pops.{name}: services {owner.get(port)} and {sname} both claim {field} port {port}")
+                        owner.setdefault(port, sname)
+            for sname in svc_names:
+                if (catalogue.get(sname) or {}).get("anycast"):
+                    c.check(not is_monitor,
+                            f"pops.{name}: service {sname} is anycast but a monitor carries no anycast addresses")
+        for sname in (svc_names if isinstance(svc_names, list) else []):
+            c.check(sname not in (roles or []), f"pops.{name}: {sname!r} is a service, not a role; list it only under services")
+        for role in (roles or []):
+            c.check(role not in catalogue, f"pops.{name}: {role!r} is a service, not a role; move it to services")
         if is_monitor:
             # The monitor is a mesh member only: no service addresses, no BGP.
-            c.check(roles == ["monitor"], f"pops.{name}: the monitor role is exclusive (no forge/bgp/replica/lab)")
+            c.check(roles == ["monitor"], f"pops.{name}: the monitor role is exclusive (no bgp/replica/lab)")
+            c.check(not svc_names, f"pops.{name}: a monitor runs no services")
             c.check(raw.get("ipv6_unicast_block") in (None, ""),
                     f"pops.{name}: a monitor has no ipv6_unicast_block (no anycast, no /48 unicast)")
         else:
@@ -718,9 +813,9 @@ def render_dns(plan: dict, pops: list[Pop]) -> str:
     )
 
 
-def nft_set(name: str, values: list[str]) -> str:
+def nft_set(name: str, values: list[str], empty_note: str = "no values known yet") -> str:
     if not values:
-        return f"# define {name}: empty (no values known yet)\n"
+        return f"# define {name}: empty ({empty_note})\n"
     return f"define {name} = {{ {', '.join(values)} }}\n"
 
 
@@ -730,11 +825,15 @@ def render_nft(plan: dict, pops: list[Pop]) -> str:
     serving = [p for p in public if p.serves]
     upstreams = plan["bgp"]["upstreams"]
     used_upstreams = sorted({p.upstream_name for p in public if p.bgp})
-    svc_ports = sorted({port for fam in ("ipv4", "ipv6") for s in plan[fam]["services"] for port in (s.get("ports") or [])})
+    catalogue = plan.get("services") or {}
+    # Every public port any service can open, from the catalogue.
+    svc_ports = sorted({port for svc in catalogue.values() for port in (svc.get("public_tcp") or [])})
     out = [
         f"# {HEADER}",
         "# nftables variables for the host firewall (include from the ruleset with",
-        '# `include "nftables-vars.nft"`). Sets are global, not per POP.',
+        '# `include "nftables-vars.nft"`). The address and mesh sets are global;',
+        "# the pop_<name>_* port sets are per POP, because a POP only opens the",
+        "# ports of the services it runs (address-plan.yaml `services:`).",
         "",
         f"define anycast_prefix_v4 = {plan['ipv4']['prefix']}",
         f"define anycast_prefix_v6 = {plan['ipv6']['prefix']}",
@@ -754,7 +853,16 @@ def render_nft(plan: dict, pops: list[Pop]) -> str:
         "# BGP peers (TCP/179, multihop): allow in both directions",
         nft_set("bgp_peers_v4", [upstreams[u]["peer_ipv4"] for u in used_upstreams]).rstrip("\n"),
         nft_set("bgp_peers_v6", [upstreams[u]["peer_ipv6"] for u in used_upstreams]).rstrip("\n"),
+        "",
+        "# Per-POP ports. public_tcp is the union of the POP's services'",
+        "# public_tcp; private_tcp adds the platform's own mesh ports",
+        "# (node_private_tcp). modules/forge-node renders the same values into",
+        "# /etc/nftables.conf; these are the generated cross-check.",
     ]
+    for p in public:
+        note = "runs no services" if not p.services else "this POP's services open no public ports"
+        out.append(nft_set(f"pop_{p.name}_public_tcp", [str(x) for x in p.public_tcp], note).rstrip("\n"))
+        out.append(nft_set(f"pop_{p.name}_private_tcp", [str(x) for x in p.private_tcp]).rstrip("\n"))
     return "\n".join(out) + "\n"
 
 
@@ -785,16 +893,21 @@ def render_summary(plan: dict, pops: list[Pop]) -> str:
         "",
         "## POPs",
         "",
-        "| POP | Provider | Region | Index | Unicast /64 | Node address | Mesh address | Provider IPv4 | Provider IPv6 | Roles |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| POP | Provider | Region | Index | Unicast /64 | Node address | Mesh address | Provider IPv4 | Provider IPv6 | Services | Roles | Public TCP |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for p in pops:
         block = f"`{p.unicast_block}`" if p.unicast_block is not None else "-"
         node = f"`{p.node_address}`" if p.node_address is not None else "-"
+        # A critical service is marked *: its failure withdraws the POP (ADR 0014).
+        svc = ", ".join(f"{s}*" if s in p.critical_services else s for s in p.services) or "-"
         lines.append(
             f"| {p.name} | {p.provider} | {p.region} | {p.index} | {block} | {node} | "
-            f"`{p.wg_address}` | {p.provider_ipv4 or '_unassigned_'} | {p.provider_ipv6 or '_unassigned_'} | {', '.join(p.roles)} |"
+            f"`{p.wg_address}` | {p.provider_ipv4 or '_unassigned_'} | {p.provider_ipv6 or '_unassigned_'} | "
+            f"{svc} | {', '.join(p.roles)} | {', '.join(str(x) for x in p.public_tcp) or '-'} |"
         )
+    lines.append("")
+    lines.append("`*` = critical: a failed health check withdraws the POP from anycast (ADR 0014).")
     lines += [
         "",
         "## IPv6 layout",

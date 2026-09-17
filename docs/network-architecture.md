@@ -264,6 +264,32 @@ moment they are entered. PTRs for the mesh (ULA) are not published.
 `netgen` does not yet emit PTR records; `rdns.ptr` in the plan fixes the
 naming so it can be added without renaming anything.
 
+## 7a. Service catalogue
+
+`services:` in the address plan defines each service once; every POP lists the
+services it runs by name, and `roles:` is left to the infrastructure roles
+(`bgp`, `replica`, `lab`, `monitor`). A service declares:
+
+| Field | Meaning |
+| --- | --- |
+| `critical` | a failed health check withdraws the POP from anycast |
+| `anycast` | binds the anycast service addresses; needs a matching `ipv4/ipv6.services` address entry |
+| `public_tcp` | admitted from the internet on every interface except `wg0` |
+| `private_tcp` | admitted on `wg0` only |
+
+`node_private_tcp` holds the mesh ports the platform opens regardless of
+service, keyed by role (`all: [9101]` node-exporter, `bgp: [9324]`
+bird-exporter). A POP's firewall is the union: its services' ports plus those.
+`scripts/netgen --check` rejects an unknown service, a service name used as a
+role, two services on one POP claiming the same port, a port that is both
+public and private, an anycast service with no address, and a service on a
+monitor.
+
+**Anycast is per POP, not per service.** One health verdict decides whether a
+node announces the prefixes, so everything on that node shares the fate of the
+withdrawal. `critical` is what separates a service that may withdraw the POP
+from one that must only alert; see ADR 0014.
+
 ## 8. What is generated from what
 
 | Input | Output | Consumer |
@@ -272,7 +298,7 @@ naming so it can be added without renaming anything.
 | constant | `infra/bird/generated/<pop>/state.conf` | included by bird.conf; rewritten by `bgp-announce` |
 | `wireguard`, `pops` + overrides `wireguard.public_keys`, `pops.*.provider_ipv*` | `infra/wireguard/generated/<pop>/wg0.conf` | wg-quick on the node after `__WG_PRIVATE_KEY__` is filled from SOPS |
 | `zone`, `ipv4/ipv6.services`, `pops` (dns: true, non-lab) | `infra/network/generated/dns-nodes.yaml` | `infra/opentofu/modules/cloudflare-dns` variables `anycast_v4`, `anycast_v6`, `nodes` |
-| `ipv4/ipv6`, `pops` (non-lab), `bgp.upstreams`, `wireguard` | `infra/network/generated/nftables-vars.nft` | host nftables ruleset (`include`) |
+| `ipv4/ipv6`, `pops` (non-lab), `bgp.upstreams`, `wireguard`, `services`, `node_private_tcp` | `infra/network/generated/nftables-vars.nft` | host nftables ruleset (`include`); the `pop_<name>_*_tcp` sets cross-check what `modules/forge-node` renders |
 | everything | `infra/network/generated/summary.md` | humans, PR review |
 
 Placeholders left for the deploy step: `__BGP_MD5__` (from

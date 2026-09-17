@@ -162,6 +162,17 @@ variable "offsite_bucket" {
   default     = ""
 }
 
+variable "public_tcp_ports" {
+  description = "Ports nftables admits from the internet, as an nft set body (\"22, 1965\"). The union of the public_tcp of the services this POP runs (address-plan.yaml `services:`); netgen emits the same set as pop_<name>_public_tcp in infra/network/generated/nftables-vars.nft, and tests/network asserts the two agree."
+  type        = string
+  default     = "22, 1965"
+
+  validation {
+    condition     = can(regex("^[0-9]+(, *[0-9]+)*$", var.public_tcp_ports))
+    error_message = "public_tcp_ports must be a comma-separated list of port numbers."
+  }
+}
+
 variable "mirrors" {
   description = "Repositories mirrored to an external remote after every push and hourly: \"owner/name\" => ssh or https URL (forge.toml [[mirrors]]). The ssh deploy key is mirror_deploy_key in the bundle; without it mirroring stays disabled."
   type        = map(string)
