@@ -138,20 +138,61 @@ wireguard:
   private_key_ref: "sops:infra/secrets/nodes/{pop}.enc.yaml#wg_private_key"
 
 # ---------------------------------------------------------------------------
+# Service catalogue: one entry per service the platform runs, defined once and
+# referenced by name from each POP's `services:` list. This is the source of
+# truth for the host firewall (which ports a POP opens) and for the anycast
+# withdrawal policy (`critical`).
+#
+# NOTE ON NAMING: `ipv6.services` / `ipv4.services` above are *address
+# assignments* (which anycast address a service answers on). This block is the
+# *service definition*. An address entry whose `name` matches a catalogue key
+# is that service's anycast address; an entry with no catalogue key is a
+# reservation and must declare `ports: []`.
+#
+#   critical     a failed health check withdraws the POP from anycast (ADR 0014).
+#                Anycast is per-POP, not per-service: one health verdict decides
+#                whether the node attracts traffic for everything on it, so a
+#                non-critical service that dies must only alert, never withdraw
+#                the prefixes and take the critical services down with it.
+#   anycast      binds the anycast service addresses; requires a POP that
+#                carries them (any POP that is not a monitor).
+#   public_tcp   admitted from the internet on every non-wg0 interface.
+#   private_tcp  admitted on wg0 only (the WireGuard mesh).
+# ---------------------------------------------------------------------------
+services:
+  forge:
+    description: "Gemini/Titan forge and Git over SSH"
+    critical: true
+    anycast: true
+    public_tcp: [22, 1965]          # Git over SSH, Gemini/Titan
+    private_tcp: [9100, 9200]       # forge metrics, cluster control RPC
+
+# Ports every node exposes on the mesh regardless of which services it runs,
+# keyed by the role that brings them. These belong to the platform, not to any
+# one service, which is why they are not in the catalogue above.
+node_private_tcp:
+  all: [9101]                       # prometheus-node-exporter
+  bgp: [9324]                       # prometheus-bird-exporter (nodes running BIRD)
+
+# ---------------------------------------------------------------------------
 # POP registry. index is the POP number used in every derived address
 # (unicast /64 = :1<index>::/64, mesh address ::<index>); it must be unique
 # and stable for the life of the POP. Names are <iata-ish region><n>.
 # provider_ipv4 / provider_ipv6 are null here on purpose: they are filled at
 # deploy time from OpenTofu outputs through `scripts/netgen --overrides`.
 #
-# roles:
-#   forge, bgp, replica   a service POP: anycast + /48 unicast on dummy0, BIRD,
-#                         forge, replication; the default shape
+# services: names from the catalogue above. A service name must NOT appear in
+# `roles` (that was the pre-catalogue shape; --check rejects it).
+#
+# roles (infrastructure only, never a service name):
+#   bgp                   runs BIRD and announces the prefixes
+#   replica               participates in forge replication
 #   lab                   netns/VM simulation, its own mesh group, never public
 #   monitor               the Prometheus host (docs/monitoring.md): a mesh
 #                         member only. No ipv6_unicast_block, no anycast, no
-#                         BIRD, no bgp-announce; <name>.nodes.<zone> points at
-#                         its provider addresses. Exclusive with every other role.
+#                         BIRD, no bgp-announce, no services; <name>.nodes.<zone>
+#                         points at its provider addresses. Exclusive with every
+#                         other role.
 # ---------------------------------------------------------------------------
 pops:
   - name: ewr1
@@ -161,7 +202,8 @@ pops:
     ipv6_unicast_block: "2a0f:85c1:368:101::/64"
     wg_address: "fda5:bc65:9bb1:1::1"
     wg_listen_port: 51820
-    roles: [forge, bgp, replica]
+    services: [forge]
+    roles: [bgp, replica]
     dns: true
     provider_ipv4: null
     provider_ipv6: null
@@ -172,7 +214,8 @@ pops:
     ipv6_unicast_block: "2a0f:85c1:368:102::/64"
     wg_address: "fda5:bc65:9bb1:1::2"
     wg_listen_port: 51820
-    roles: [forge, bgp, replica]
+    services: [forge]
+    roles: [bgp, replica]
     dns: true
     provider_ipv4: null
     provider_ipv6: null
@@ -183,7 +226,8 @@ pops:
     ipv6_unicast_block: "2a0f:85c1:368:103::/64"
     wg_address: "fda5:bc65:9bb1:1::3"
     wg_listen_port: 51820
-    roles: [forge, bgp, replica]
+    services: [forge]
+    roles: [bgp, replica]
     dns: true
     provider_ipv4: null
     provider_ipv6: null
@@ -194,6 +238,7 @@ pops:
     index: 250                       # mesh address ::fa; no /48 block (monitor)
     wg_address: "fda5:bc65:9bb1:1::fa"
     wg_listen_port: 51820
+    services: []
     roles: [monitor]
     dns: true
     provider_ipv4: null
@@ -205,7 +250,8 @@ pops:
     ipv6_unicast_block: "2a0f:85c1:368:1fe::/64"
     wg_address: "fda5:bc65:9bb1:1::fe"
     wg_listen_port: 51820
-    roles: [forge, bgp, lab]
+    services: [forge]
+    roles: [bgp, lab]
     dns: false
     provider_ipv4: null
     provider_ipv6: null

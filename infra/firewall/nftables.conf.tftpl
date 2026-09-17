@@ -15,8 +15,12 @@ define ANYCAST_V6 = { ${anycast_v6} }
 define ADMIN_SSH  = ${admin_ssh_port}
 define WG_PORT    = ${wg_port}
 define WG_IF      = "${wg_iface}"
-# Private ports reachable only over the mesh: forge metrics, node-exporter,
-# forge cluster control RPC.
+# Public service ports: the union of the public_tcp of the services this POP
+# runs (address-plan.yaml `services:`; the generated cross-check is
+# pop_<name>_public_tcp in infra/network/generated/nftables-vars.nft).
+define PUBLIC_TCP  = { ${public_tcp_ports} }
+# Private ports reachable only over the mesh: the services' private_tcp plus
+# the platform's own (node-exporter, and bird-exporter on BGP nodes).
 define PRIVATE_TCP = { ${private_tcp_ports} }
 # Vultr BGP peers (multihop 2; session is outbound but allow inbound too).
 define BGP_PEERS_V4 = { 169.254.169.254 }
@@ -49,11 +53,11 @@ table inet filter {
     tcp dport $ADMIN_SSH ct state new add @ssh_admin_v4 { ip saddr limit rate 6/minute burst 10 packets } accept
     tcp dport $ADMIN_SSH ct state new add @ssh_admin_v6 { ip6 saddr limit rate 6/minute burst 10 packets } accept
 
-    # Public services: forge Git-over-SSH (22) and Gemini/Titan (1965) on
-    # anycast + provider unicast addresses (anything not arriving over wg0).
-    # Per-source new-connection ceiling; forge applies its own per-IP limits.
-    iifname != $WG_IF tcp dport { 22, 1965 } ct state new add @svc_v4 { ip saddr limit rate 60/minute burst 120 packets } accept
-    iifname != $WG_IF tcp dport { 22, 1965 } ct state new add @svc_v6 { ip6 saddr limit rate 60/minute burst 120 packets } accept
+    # Public services on anycast + provider unicast addresses (anything not
+    # arriving over wg0). Per-source new-connection ceiling; each service
+    # applies its own per-IP limits on top.
+    iifname != $WG_IF tcp dport $PUBLIC_TCP ct state new add @svc_v4 { ip saddr limit rate 60/minute burst 120 packets } accept
+    iifname != $WG_IF tcp dport $PUBLIC_TCP ct state new add @svc_v6 { ip6 saddr limit rate 60/minute burst 120 packets } accept
 
     # WireGuard mesh (peers unknown at render time; WireGuard authenticates).
     udp dport $WG_PORT accept

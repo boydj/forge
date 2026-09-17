@@ -24,6 +24,10 @@ locals {
     admin_ssh_port = var.admin_ssh_port
     wg_port        = var.wg_port
     wg_iface       = "wg0"
+    # Union of the public_tcp of the services this POP runs; the catalogue is
+    # address-plan.yaml `services:` and netgen emits pop_<name>_public_tcp as
+    # the cross-check (tests/network asserts the two agree).
+    public_tcp_ports = var.public_tcp_ports
     # forge metrics, node-exporter, bird-exporter, cluster control RPC.
     private_tcp_ports = "9100, 9101, 9324, ${var.control_port}"
   }
