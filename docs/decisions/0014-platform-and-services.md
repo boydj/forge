@@ -83,3 +83,28 @@ plan lists services, and criticality is implemented.
   larger instances; that is a cost decision per service, not a platform one.
 - Until the split, this repository contains both layers. The boundary is
   directory-level and enforced only by convention.
+
+## Known friction (found while implementing the preparation)
+
+Recorded so the split does not rediscover them:
+
+1. **"services" now means three things in the address plan**: `ipv6.services`
+   and `ipv4.services` are address *assignments*, the new `services:` block is
+   service *definitions*. Renaming the address entries to `service_addresses`
+   is mechanical but touches `scripts/netcheck`.
+2. **Ports are declared twice**, on the address entries (`ports:`) and in the
+   catalogue (`public_tcp:`). netgen validates that the former is a subset of
+   the latter, so drift is caught rather than prevented. Removing `ports:`
+   needs netgen to stop using "has ports" as its marker for a live service
+   address versus a reservation.
+3. **The per-POP port union is computed twice**, in netgen (Python) and in the
+   dev environment (HCL `yamldecode`). One generator emitting tfvars, rather
+   than OpenTofu re-deriving from the plan, removes the whole class. Worth
+   doing when the platform is extracted.
+4. **Private mesh ports are not catalogue-driven yet**: the module still takes
+   a literal list, because `control_port` is an OpenTofu variable and
+   unifying the two needs a decision about which side owns it.
+5. **`critical:` is declared but not enforced.** The catalogue records it; the
+   health controller does not read the plan. Wiring the declaration to
+   `Check.NonCritical` is what makes the policy in this ADR real rather than
+   documentary, and it needs the shared `pkg/health` this ADR extracts.
